@@ -15,7 +15,7 @@ var _ = os.Exit
 func main() {
 	fmt.Println("Logs from your program will appear here!")
 
-	server := radis.NewRadisServer("0.0.0.0:6378")
+	server := radis.NewRadisServer("0.0.0.0:6379")
 	if err := server.Start(); err != nil {
 		fmt.Println("Failed to start server: ", err)
 		os.Exit(1)

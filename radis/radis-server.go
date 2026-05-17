@@ -1,11 +1,14 @@
 package radis
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"strings"
+
+	"github.com/codecrafters-io/redis-starter-go/radis/resp"
 )
 
 type RadisServer struct {
@@ -59,32 +62,41 @@ func (s *RadisServer) Start() error {
 
 func (s *RadisServer) handleConnection(conn net.Conn) {
 	defer conn.Close()
-	buf := make([]byte, 1024)
 
 	for {
-		n, err := conn.Read(buf)
+		val, err := resp.ParseRESP(bufio.NewReader(conn))
 		if err != nil {
 			break
 		}
-		if n == 0 {
-			break
-		}
 
-
-
-		command := strings.TrimSpace(string(buf[:n]))
-		fmt.Println("command:", command)
-		parts := strings.Split(command, " ")
-
-		switch parts[0] {
-		case "PING":
-			conn.Write([]byte("+PONG\r\n"))
-		case "ECHO":
-			if len(parts) == 2 {
-				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(parts[1]), parts[1])
+		switch val.Type {
+		case resp.Array:
+			if len(val.Array) == 0 {
+				response := resp.RESPValue{Type: resp.Array, IsNull: true}
+				conn.Write(response.Serialize())
 			} else {
-				conn.Write([]byte("-ERR wrong number of arguments for 'echo' command\r\n"))
+				command := val.Array[0].Str
+				args := val.Array[1:]
+				fmt.Println("Received command:", command)
+
+				switch strings.ToUpper(command) {
+				case "PING":
+					response := resp.RESPValue{Type: resp.SimpleString, Str: "PONG"}
+					conn.Write(response.Serialize())
+				case "ECHO":
+					if len(args) != 1 {
+						response := resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'echo' command"}
+						conn.Write(response.Serialize())
+					} else {
+						response := resp.RESPValue{Type: resp.BulkString, Str: args[0].Str}
+						conn.Write(response.Serialize())
+					}
+				default:
+					response := resp.RESPValue{Type: resp.Error, Str: fmt.Sprintf("ERR unknown command '%s'", command)}
+					conn.Write(response.Serialize())
+				}
 			}
 		}
+
 	}
 }

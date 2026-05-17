@@ -50,18 +50,12 @@ func TestHandleConnection(t *testing.T) {
 	}
 	defer conn.Close()
 
-	_, err = conn.Write([]byte("PING\r\n"))
+	_, err = conn.Write(respArray("PING"))
 	if err != nil {
 		t.Fatal("failed to write:", err)
 	}
 
-	buf := make([]byte, 1024)
-	n, err := conn.Read(buf)
-	if err != nil {
-		t.Fatal("failed to read response:", err)
-	}
-
-	got := string(buf[:n])
+	got := readWithTimeout(t, conn)
 	expected := "+PONG\r\n"
 	if got != expected {
 		t.Errorf("expected %q, got %q", expected, got)
@@ -78,15 +72,11 @@ func TestMultiplePings(t *testing.T) {
 	defer conn.Close()
 
 	for i := 0; i < 3; i++ {
-		conn.Write([]byte("PING\r\n"))
+		conn.Write(respArray("PING"))
 
-		buf := make([]byte, 1024)
-		n, err := conn.Read(buf)
-		if err != nil {
-			t.Fatalf("read %d failed: %v", i, err)
-		}
-		if string(buf[:n]) != "+PONG\r\n" {
-			t.Errorf("ping %d: expected +PONG\\r\\n, got %q", i, string(buf[:n]))
+		got := readWithTimeout(t, conn)
+		if got != "+PONG\r\n" {
+			t.Errorf("ping %d: expected +PONG\\r\\n, got %q", i, got)
 		}
 	}
 }
@@ -104,15 +94,10 @@ func TestConcurrentClients(t *testing.T) {
 			}
 			defer conn.Close()
 
-			conn.Write([]byte("PING\r\n"))
-			buf := make([]byte, 1024)
-			n, err := conn.Read(buf)
-			if err != nil {
-				errs <- err
-				return
-			}
-			if string(buf[:n]) != "+PONG\r\n" {
-				errs <- fmt.Errorf("expected +PONG\\r\\n, got %q", string(buf[:n]))
+			conn.Write(respArray("PING"))
+			got := readWithTimeout(t, conn)
+			if got != "+PONG\r\n" {
+				errs <- fmt.Errorf("expected +PONG\\r\\n, got %q", got)
 				return
 			}
 			errs <- nil
@@ -135,16 +120,11 @@ func TestECHOCommnad(t *testing.T) {
 	}
 	defer conn.Close()
 
-	conn.Write([]byte("ECHO hello\r\n"))
-	buf := make([]byte, 1024)
-	n, err := conn.Read(buf)
-	if err != nil {
-		t.Fatal("failed to read response:", err)
-	}
-	got := string(buf[:n])
+	conn.Write(respArray("ECHO", "hello"))
+	got := readWithTimeout(t, conn)
 	expected := "$5\r\nhello\r\n"
 	if got != expected {
-		t.Errorf("expected %q, got %q", expected, got)
+		t.Errorf("expected %q, got %q", expected, got		)
 	}
 }
 
