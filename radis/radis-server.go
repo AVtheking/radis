@@ -14,19 +14,21 @@ import (
 	"github.com/codecrafters-io/redis-starter-go/radis/resp"
 )
 
+type StoreItem struct {
+	value  string
+	expiry time.Time
+}
 type RadisServer struct {
 	address  string
 	listener net.Listener
-	data     map[string]string
-	expiry   map[string]time.Time
+	data     map[string]StoreItem
 	mu       sync.RWMutex
 }
 
 func NewRadisServer(address string) *RadisServer {
 	return &RadisServer{
 		address: address,
-		data:    make(map[string]string),
-		expiry:  make(map[string]time.Time),
+		data:    make(map[string]StoreItem),
 	}
 }
 
@@ -125,10 +127,7 @@ func (s *RadisServer) Set(args []resp.RESPValue) resp.RESPValue {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data[key] = value
-	if !expiry.IsZero() {
-		s.expiry[key] = expiry
-	}
+	s.data[key] = StoreItem{value: value, expiry: expiry}
 
 	return resp.RESPValue{Type: resp.SimpleString, Str: "OK"}
 }
@@ -146,12 +145,11 @@ func (s *RadisServer) Get(args []resp.RESPValue) resp.RESPValue {
 		return resp.RESPValue{Type: resp.BulkString, IsNull: true}
 	}
 
-	expiry, ok := s.expiry[key]
-	if ok && time.Now().After(expiry) {
+	if !value.expiry.IsZero() && time.Now().After(value.expiry) {
 		return resp.RESPValue{Type: resp.BulkString, IsNull: true}
 	}
 
-	return resp.RESPValue{Type: resp.BulkString, Str: value}
+	return resp.RESPValue{Type: resp.BulkString, Str: value.value}
 }
 
 func (s *RadisServer) Ping(args []resp.RESPValue) resp.RESPValue {
