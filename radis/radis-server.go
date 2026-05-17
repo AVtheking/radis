@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -69,9 +70,10 @@ func (s *RadisServer) Start() error {
 
 func (s *RadisServer) handleConnection(conn net.Conn) {
 	defer conn.Close()
+	reader := bufio.NewReader(conn)
 
 	for {
-		val, err := resp.ParseRESP(bufio.NewReader(conn))
+		val, err := resp.ParseRESP(reader)
 		if err != nil {
 			break
 		}
@@ -101,11 +103,22 @@ func (s *RadisServer) Set(args []resp.RESPValue) resp.RESPValue {
 
 	if len(args) > 2 {
 		expiryCommand := args[2].Str
-		if strings.ToUpper(expiryCommand) == "EX" {
-			expiry = time.Now().Add(time.Duration(args[3].Num) * time.Second)
-		} else if strings.ToUpper(expiryCommand) == "PX" {
-			expiry = time.Now().Add(time.Duration(args[3].Num) * time.Millisecond)
-		} else {
+		switch strings.ToUpper(expiryCommand) {
+		case "EX":
+			seconds, err := strconv.ParseInt(args[3].Str, 10, 64)
+			if err != nil {
+				return resp.RESPValue{Type: resp.Error, Str: "ERR invalid expiry time"}
+			}
+
+			expiry = time.Now().Add(time.Duration(seconds) * time.Second)
+		case "PX":
+			milliseconds, err := strconv.ParseInt(args[3].Str, 10, 64)
+			if err != nil {
+				return resp.RESPValue{Type: resp.Error, Str: "ERR invalid expiry time"}
+			}
+
+			expiry = time.Now().Add(time.Duration(milliseconds) * time.Millisecond)
+		default:
 			return resp.RESPValue{Type: resp.Error, Str: "ERR invalid expiry command"}
 		}
 	}
@@ -135,8 +148,6 @@ func (s *RadisServer) Get(args []resp.RESPValue) resp.RESPValue {
 
 	expiry, ok := s.expiry[key]
 	if ok && time.Now().After(expiry) {
-		delete(s.data, key)
-		delete(s.expiry, key)
 		return resp.RESPValue{Type: resp.BulkString, IsNull: true}
 	}
 

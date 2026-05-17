@@ -342,8 +342,16 @@ func TestSETWithExpiryInSeconds(t *testing.T) {
 	if got != expected {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
+	//it should return the value here as it is not expired yet
+	conn.Write(respArray("GET", "key"))
+	got = readWithTimeout(t, conn)
+	expected = "$5\r\nvalue\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
 
 	time.Sleep(3 * time.Second)
+	//it should return -1 here as it is expired now
 	conn.Write(respArray("GET", "key"))
 	got = readWithTimeout(t, conn)
 	expected = "$-1\r\n"
@@ -365,7 +373,16 @@ func TestSETWithExpiryInMilliseconds(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
 
+	//it should return the value here as it is not expired yet
+	conn.Write(respArray("GET", "key"))
+	got = readWithTimeout(t, conn)
+	expected = "$5\r\nvalue\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+
 	time.Sleep(3 * time.Second)
+	//it should return -1 here as it is expired now
 	conn.Write(respArray("GET", "key"))
 	got = readWithTimeout(t, conn)
 	expected = "$-1\r\n"
