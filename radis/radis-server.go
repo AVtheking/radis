@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/codecrafters-io/redis-starter-go/radis/resp"
 )
@@ -16,6 +17,7 @@ type RadisServer struct {
 	address  string
 	listener net.Listener
 	data     map[string]string
+	expiry   map[string]time.Time
 	mu       sync.RWMutex
 }
 
@@ -23,6 +25,7 @@ func NewRadisServer(address string) *RadisServer {
 	return &RadisServer{
 		address: address,
 		data:    make(map[string]string),
+		expiry:  make(map[string]time.Time),
 	}
 }
 
@@ -94,9 +97,26 @@ func (s *RadisServer) Set(args []resp.RESPValue) resp.RESPValue {
 	}
 	key := args[0].Str
 	value := args[1].Str
+	expiry := time.Time{}
+
+	if len(args) > 2 {
+		expiryCommand := args[2].Str
+		if strings.ToUpper(expiryCommand) == "EX" {
+			expiry = time.Now().Add(time.Duration(args[3].Num) * time.Second)
+		} else if strings.ToUpper(expiryCommand) == "PX" {
+			expiry = time.Now().Add(time.Duration(args[3].Num) * time.Millisecond)
+		} else {
+			return resp.RESPValue{Type: resp.Error, Str: "ERR invalid expiry command"}
+		}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data[key] = value
+	if !expiry.IsZero() {
+		s.expiry[key] = expiry
+	}
+
 	return resp.RESPValue{Type: resp.SimpleString, Str: "OK"}
 }
 
@@ -109,10 +129,17 @@ func (s *RadisServer) Get(args []resp.RESPValue) resp.RESPValue {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	value, ok := s.data[key]
-
 	if !ok {
 		return resp.RESPValue{Type: resp.BulkString, IsNull: true}
 	}
+
+	expiry, ok := s.expiry[key]
+	if ok && time.Now().After(expiry) {
+		delete(s.data, key)
+		delete(s.expiry, key)
+		return resp.RESPValue{Type: resp.BulkString, IsNull: true}
+	}
+
 	return resp.RESPValue{Type: resp.BulkString, Str: value}
 }
 

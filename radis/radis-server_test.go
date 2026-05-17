@@ -329,3 +329,47 @@ func TestGETCommand(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
 }
+
+func TestSETWithExpiryInSeconds(t *testing.T) {
+	server := startTestServer(t)
+	conn, err := net.Dial("tcp", server.Addr())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	conn.Write(respArray("SET", "key", "value", "EX", "2"))
+	got := readWithTimeout(t, conn)
+	expected := "+OK\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+
+	time.Sleep(3 * time.Second)
+	conn.Write(respArray("GET", "key"))
+	got = readWithTimeout(t, conn)
+	expected = "$-1\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestSETWithExpiryInMilliseconds(t *testing.T) {
+	server := startTestServer(t)
+	conn, err := net.Dial("tcp", server.Addr())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	conn.Write(respArray("SET", "key", "value", "PX", "2000"))
+	got := readWithTimeout(t, conn)
+	expected := "+OK\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+
+	time.Sleep(3 * time.Second)
+	conn.Write(respArray("GET", "key"))
+	got = readWithTimeout(t, conn)
+	expected = "$-1\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
