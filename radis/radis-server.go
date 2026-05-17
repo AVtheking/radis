@@ -82,55 +82,71 @@ func (s *RadisServer) handleConnection(conn net.Conn) {
 				command := val.Array[0].Str
 				args := val.Array[1:]
 				fmt.Println("Received command:", command)
-
-				switch strings.ToUpper(command) {
-				case "PING":
-					response := resp.RESPValue{Type: resp.SimpleString, Str: "PONG"}
-					conn.Write(response.Serialize())
-				case "ECHO":
-					if len(args) != 1 {
-						response := resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'echo' command"}
-						conn.Write(response.Serialize())
-					} else {
-						response := resp.RESPValue{Type: resp.BulkString, Str: args[0].Str}
-						conn.Write(response.Serialize())
-					}
-				case "SET":
-					if len(args) < 2 {
-						response := resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'set' command"}
-						conn.Write(response.Serialize())
-					} else {
-						key := args[0].Str
-						value := args[1].Str
-						s.mu.Lock()
-						s.data[key] = value
-						s.mu.Unlock()
-						response := resp.RESPValue{Type: resp.SimpleString, Str: "OK"}
-						conn.Write(response.Serialize())
-					}
-				case "GET":
-					if len(args) != 1 {
-						response := resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'get' command"}
-						conn.Write(response.Serialize())
-					} else {
-						key := args[0].Str
-						s.mu.RLock()
-						value, ok := s.data[key]
-						s.mu.RUnlock()
-						if !ok {
-							response := resp.RESPValue{Type: resp.BulkString, IsNull: true}
-							conn.Write(response.Serialize())
-						} else {
-							response := resp.RESPValue{Type: resp.BulkString, Str: value}
-							conn.Write(response.Serialize())
-						}
-					}
-				default:
-					response := resp.RESPValue{Type: resp.Error, Str: fmt.Sprintf("ERR unknown command '%s'", command)}
-					conn.Write(response.Serialize())
-				}
+				s.handleCommand(conn, command, args)
 			}
 		}
-
 	}
+}
+
+func (s *RadisServer) Set(args []resp.RESPValue) resp.RESPValue {
+	if len(args) < 2 {
+		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'set' command"}
+	}
+	key := args[0].Str
+	value := args[1].Str
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data[key] = value
+	return resp.RESPValue{Type: resp.SimpleString, Str: "OK"}
+}
+
+func (s *RadisServer) Get(args []resp.RESPValue) resp.RESPValue {
+	if len(args) != 1 {
+		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'get' command"}
+	}
+
+	key := args[0].Str
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	value, ok := s.data[key]
+
+	if !ok {
+		return resp.RESPValue{Type: resp.BulkString, IsNull: true}
+	}
+	return resp.RESPValue{Type: resp.BulkString, Str: value}
+}
+
+func (s *RadisServer) Ping(args []resp.RESPValue) resp.RESPValue {
+	if len(args) != 0 {
+		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'ping' command"}
+	}
+	return resp.RESPValue{Type: resp.SimpleString, Str: "PONG"}
+}
+
+func (s *RadisServer) Echo(args []resp.RESPValue) resp.RESPValue {
+	if len(args) != 1 {
+		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'echo' command"}
+	}
+	return resp.RESPValue{Type: resp.BulkString, Str: args[0].Str}
+}
+
+func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.RESPValue) {
+	switch strings.ToUpper(command) {
+	case "PING":
+		response := s.Ping(args)
+		conn.Write(response.Serialize())
+	case "ECHO":
+		response := s.Echo(args)
+		conn.Write(response.Serialize())
+	case "SET":
+		response := s.Set(args)
+		conn.Write(response.Serialize())
+	case "GET":
+		response := s.Get(args)
+		conn.Write(response.Serialize())
+	default:
+		response := resp.RESPValue{Type: resp.Error, Str: fmt.Sprintf("ERR unknown command '%s'", command)}
+		conn.Write(response.Serialize())
+	}
+
 }
