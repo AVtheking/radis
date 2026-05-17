@@ -452,3 +452,68 @@ func TestLRangeCommand(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
 }
+
+func startTestServerAndConnect(t *testing.T) (net.Conn, error) {
+	server := startTestServer(t)
+	conn, err := net.Dial("tcp", server.Addr())
+	require.NoError(t, err)
+	return conn, nil
+}
+
+func TestLRangeNegativeStart(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	defer conn.Close()
+	require.NoError(t, err)
+
+	conn.Write(respArray("RPUSH", "list", "value1", "value2", "value3"))
+	got := readWithTimeout(t, conn)
+	expected := ":3\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+
+	conn.Write(respArray("LRange", "list", "-2", "-1"))
+	got = readWithTimeout(t, conn)
+	expected = "*2\r\n$6\r\nvalue2\r\n$6\r\nvalue3\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestLRangeNegativeEnd(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	defer conn.Close()
+	require.NoError(t, err)
+
+	conn.Write(respArray("RPUSH", "list", "value1", "value2", "value3"))
+	got := readWithTimeout(t, conn)
+	expected := ":3\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+	conn.Write(respArray("LRange", "list", "0", "-2"))
+	got = readWithTimeout(t, conn)
+	expected = "*2\r\n$6\r\nvalue1\r\n$6\r\nvalue2\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestLRangeOutOfBoundsInNegative(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	defer conn.Close()
+	require.NoError(t, err)
+
+	conn.Write(respArray("RPUSH", "list", "value1", "value2", "value3"))
+	got := readWithTimeout(t, conn)
+	expected := ":3\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+	conn.Write(respArray("LRange", "list", "-100", "-2"))
+	got = readWithTimeout(t, conn)
+	expected = "*2\r\n$6\r\nvalue1\r\n$6\r\nvalue2\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}

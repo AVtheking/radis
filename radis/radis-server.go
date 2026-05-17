@@ -203,6 +203,22 @@ func (s *RadisServer) LRange(args []resp.RESPValue) resp.RESPValue {
 		return resp.RESPValue{Type: resp.Array, IsNull: true}
 	}
 
+	if start < 0 {
+		start = max(0, int64(len(list))+start)
+	}
+
+	if end < 0 {
+		end = max(0, int64(len(list))+end)
+	}
+
+	if start > int64(len(list)) {
+		return resp.RESPValue{Type: resp.Array, IsNull: true}
+	}
+
+	if end > int64(len(list)) {
+		end = int64(len(list)) - 1
+	}
+
 	response := resp.RESPValue{Type: resp.Array, Array: []resp.RESPValue{}}
 	for i := start; i <= end; i++ {
 		response.Array = append(response.Array, resp.RESPValue{Type: resp.BulkString, Str: list[i]})
