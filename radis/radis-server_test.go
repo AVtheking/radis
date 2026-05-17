@@ -517,3 +517,49 @@ func TestLRangeOutOfBoundsInNegative(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
 }
+
+func TestLPushCommand(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	defer conn.Close()
+	require.NoError(t, err)
+
+	conn.Write(respArray("LPUSH", "list", "a"))
+	got := readWithTimeout(t, conn)
+	expected := ":1\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+
+	conn.Write(respArray("LPUSH", "list", "b"))
+	got = readWithTimeout(t, conn)
+	expected = ":2\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+
+	conn.Write(respArray("LRange", "list", "0", "-1"))
+	got = readWithTimeout(t, conn)
+	expected = "*2\r\n$1\r\nb\r\n$1\r\na\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestLPushMultipleValues(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	defer conn.Close()
+	require.NoError(t, err)
+
+	conn.Write(respArray("LPUSH", "list", "a", "b", "c"))
+	got := readWithTimeout(t, conn)
+	expected := ":3\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+	conn.Write(respArray("LRange", "list", "0", "-1"))
+	got = readWithTimeout(t, conn)
+	expected = "*3\r\n$1\r\nc\r\n$1\r\nb\r\n$1\r\na\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}

@@ -226,6 +226,28 @@ func (s *RadisServer) LRange(args []resp.RESPValue) resp.RESPValue {
 
 	return response
 }
+
+func (s *RadisServer) LPush(args []resp.RESPValue) resp.RESPValue {
+	if len(args) < 2 {
+		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'lpush' command"}
+	}
+
+	key := args[0].Str
+	values := args[1:]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.lists[key]; !ok {
+		s.lists[key] = []string{}
+	}
+	for _, v := range values {
+		s.lists[key] = append([]string{v.Str}, s.lists[key]...)
+	}
+
+	return resp.RESPValue{Type: resp.Integer, Num: int64(len(s.lists[key]))}
+}
+
 func (s *RadisServer) Ping(args []resp.RESPValue) resp.RESPValue {
 	if len(args) != 0 {
 		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'ping' command"}
@@ -260,6 +282,9 @@ func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.R
 	case "LRANGE":
 		response := s.LRange(args)
 		fmt.Println("LRange response:", string(response.Serialize()))
+		conn.Write(response.Serialize())
+	case "LPUSH":
+		response := s.LPush(args)
 		conn.Write(response.Serialize())
 	default:
 		response := resp.RESPValue{Type: resp.Error, Str: fmt.Sprintf("ERR unknown command '%s'", command)}
