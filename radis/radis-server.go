@@ -107,6 +107,10 @@ func (s *RadisServer) Set(args []resp.RESPValue) resp.RESPValue {
 
 	if len(args) > 2 {
 		expiryCommand := args[2].Str
+		if len(args) < 4 {
+			return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'set' command"}
+		}
+
 		switch strings.ToUpper(expiryCommand) {
 		case "EX":
 			seconds, err := strconv.ParseInt(args[3].Str, 10, 64)
@@ -175,6 +179,37 @@ func (s *RadisServer) RPush(args []resp.RESPValue) resp.RESPValue {
 	return resp.RESPValue{Type: resp.Integer, Num: int64(len(s.lists[key]))}
 }
 
+func (s *RadisServer) LRange(args []resp.RESPValue) resp.RESPValue {
+	if len(args) < 3 {
+		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'lrange' command"}
+	}
+
+	key := args[0].Str
+
+	start, err := strconv.ParseInt(args[1].Str, 10, 64)
+	if err != nil {
+		return resp.RESPValue{Type: resp.Error, Str: "ERR invalid start index"}
+	}
+
+	end, err := strconv.ParseInt(args[2].Str, 10, 64)
+	if err != nil {
+		return resp.RESPValue{Type: resp.Error, Str: "ERR invalid end index"}
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	list, ok := s.lists[key]
+	if !ok {
+		return resp.RESPValue{Type: resp.Array, IsNull: true}
+	}
+
+	response := resp.RESPValue{Type: resp.Array, Array: []resp.RESPValue{}}
+	for i := start; i <= end; i++ {
+		response.Array = append(response.Array, resp.RESPValue{Type: resp.BulkString, Str: list[i]})
+	}
+
+	return response
+}
 func (s *RadisServer) Ping(args []resp.RESPValue) resp.RESPValue {
 	if len(args) != 0 {
 		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'ping' command"}
@@ -205,6 +240,10 @@ func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.R
 		conn.Write(response.Serialize())
 	case "RPUSH":
 		response := s.RPush(args)
+		conn.Write(response.Serialize())
+	case "LRANGE":
+		response := s.LRange(args)
+		fmt.Println("LRange response:", string(response.Serialize()))
 		conn.Write(response.Serialize())
 	default:
 		response := resp.RESPValue{Type: resp.Error, Str: fmt.Sprintf("ERR unknown command '%s'", command)}

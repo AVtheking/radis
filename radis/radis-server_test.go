@@ -425,3 +425,30 @@ func TestRPushMultipleValues(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
 }
+
+func TestLRangeCommand(t *testing.T) {
+	server := startTestServer(t)
+	conn, err := net.Dial("tcp", server.Addr())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	conn.Write(respArray("RPUSH", "list", "value1", "value2", "value3"))
+	got := readWithTimeout(t, conn)
+	expected := ":3\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+	// conn.Write(respArray("LRange", "list", "0", "-1"))
+	// got = readWithTimeout(t, conn)
+	// expected = "*3\r\n$5\r\nvalue1\r\n$5\r\nvalue2\r\n$5\r\nvalue3\r\n"
+	// if got != expected {
+	// 	t.Errorf("expected %q, got %q", expected, got)
+	// }
+
+	conn.Write(respArray("LRange", "list", "1", "2"))
+	got = readWithTimeout(t, conn)
+	expected = "*2\r\n$6\r\nvalue2\r\n$6\r\nvalue3\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
