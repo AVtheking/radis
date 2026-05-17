@@ -70,15 +70,18 @@ func (s *RadisServer) handleConnection(conn net.Conn) {
 			break
 		}
 
+
+
 		command := strings.TrimSpace(string(buf[:n]))
+		fmt.Println("command:", command)
 		parts := strings.Split(command, " ")
-		
+
 		switch parts[0] {
 		case "PING":
 			conn.Write([]byte("+PONG\r\n"))
 		case "ECHO":
 			if len(parts) == 2 {
-				conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(parts[1]), parts[1])))
+				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(parts[1]), parts[1])
 			} else {
 				conn.Write([]byte("-ERR wrong number of arguments for 'echo' command\r\n"))
 			}
