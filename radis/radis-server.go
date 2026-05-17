@@ -279,11 +279,25 @@ func (s *RadisServer) LLen(args []resp.RESPValue) resp.RESPValue {
 }
 
 func (s *RadisServer) LPop(args []resp.RESPValue) resp.RESPValue {
-	if len(args) != 1 {
+	if len(args) < 1 {
 		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'lpop' command"}
 	}
 
 	key := args[0].Str
+	elementsToPop := 1
+
+	if len(args) > 1 {
+		elementsToPopInt, err := strconv.ParseInt(args[1].Str, 10, 64)
+		if err != nil {
+			return resp.RESPValue{Type: resp.Error, Str: "ERR invalid number of elements to pop"}
+		}
+		if elementsToPopInt < 1 {
+			return resp.RESPValue{Type: resp.Error, Str: "ERR number of elements to pop must be greater than 0"}
+		}
+
+		elementsToPop = int(elementsToPopInt)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -292,11 +306,20 @@ func (s *RadisServer) LPop(args []resp.RESPValue) resp.RESPValue {
 		return resp.RESPValue{Type: resp.BulkString, IsNull: true}
 	}
 
-	//pop the first element from the list
-	firstElement := list[0]
-	s.lists[key] = list[1:]
+	response := resp.RESPValue{Type: resp.Array, Array: []resp.RESPValue{}}
 
-	return resp.RESPValue{Type: resp.BulkString, Str: firstElement}
+	if elementsToPop == 1 {
+		firstElement := list[0]
+		s.lists[key] = list[1:]
+		return resp.RESPValue{Type: resp.BulkString, Str: firstElement}
+	} else {
+		for i := 0; i < elementsToPop; i++ {
+			elementToRemove := list[i]
+			response.Array = append(response.Array, resp.RESPValue{Type: resp.BulkString, Str: elementToRemove})
+			s.lists[key] = list[i+1:]
+		}
+	}
+	return response
 }
 
 func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.RESPValue) {

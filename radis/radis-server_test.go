@@ -613,6 +613,12 @@ func TestLPopCommand(t *testing.T) {
 	if got != expected {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
+	conn.Write(respArray("LRange", "list", "0", "-1"))
+	got = readWithTimeout(t, conn)
+	expected = "*2\r\n$1\r\nb\r\n$1\r\nc\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
 }
 
 func TestLPopWithNonExistingList(t *testing.T) {
@@ -623,6 +629,39 @@ func TestLPopWithNonExistingList(t *testing.T) {
 	conn.Write(respArray("LPOP", "list"))
 	got := readWithTimeout(t, conn)
 	expected := "$-1\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+	conn.Write(respArray("LRange", "list", "0", "-1"))
+	got = readWithTimeout(t, conn)
+	expected = "*-1\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestLPoPWithMultipleElements(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	defer conn.Close()
+	require.NoError(t, err)
+
+	conn.Write(respArray("RPUSH", "list", "a", "b", "c", "d", "e"))
+	got := readWithTimeout(t, conn)
+	expected := ":5\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+
+	conn.Write(respArray("LPOP", "list", "2"))
+	got = readWithTimeout(t, conn)
+	expected = "*2\r\n$1\r\na\r\n$1\r\nb\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+
+	conn.Write(respArray("LRange", "list", "0", "-1"))
+	got = readWithTimeout(t, conn)
+	expected = "*3\r\n$1\r\nc\r\n$1\r\nd\r\n$1\r\ne\r\n"
 	if got != expected {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
