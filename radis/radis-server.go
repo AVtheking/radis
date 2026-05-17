@@ -97,6 +97,20 @@ func (s *RadisServer) handleConnection(conn net.Conn) {
 	}
 }
 
+func (s *RadisServer) Ping(args []resp.RESPValue) resp.RESPValue {
+	if len(args) != 0 {
+		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'ping' command"}
+	}
+	return resp.RESPValue{Type: resp.SimpleString, Str: "PONG"}
+}
+
+func (s *RadisServer) Echo(args []resp.RESPValue) resp.RESPValue {
+	if len(args) != 1 {
+		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'echo' command"}
+	}
+	return resp.RESPValue{Type: resp.BulkString, Str: args[0].Str}
+}
+
 func (s *RadisServer) Set(args []resp.RESPValue) resp.RESPValue {
 	if len(args) < 2 {
 		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'set' command"}
@@ -248,18 +262,41 @@ func (s *RadisServer) LPush(args []resp.RESPValue) resp.RESPValue {
 	return resp.RESPValue{Type: resp.Integer, Num: int64(len(s.lists[key]))}
 }
 
-func (s *RadisServer) Ping(args []resp.RESPValue) resp.RESPValue {
-	if len(args) != 0 {
-		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'ping' command"}
+func (s *RadisServer) LLen(args []resp.RESPValue) resp.RESPValue {
+	if len(args) != 1 {
+		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'llen' command"}
 	}
-	return resp.RESPValue{Type: resp.SimpleString, Str: "PONG"}
+
+	key := args[0].Str
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	list, ok := s.lists[key]
+	if !ok {
+		return resp.RESPValue{Type: resp.Integer, Num: 0}
+	}
+
+	return resp.RESPValue{Type: resp.Integer, Num: int64(len(list))}
 }
 
-func (s *RadisServer) Echo(args []resp.RESPValue) resp.RESPValue {
+func (s *RadisServer) LPop(args []resp.RESPValue) resp.RESPValue {
 	if len(args) != 1 {
-		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'echo' command"}
+		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'lpop' command"}
 	}
-	return resp.RESPValue{Type: resp.BulkString, Str: args[0].Str}
+
+	key := args[0].Str
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	list, ok := s.lists[key]
+	if !ok {
+		return resp.RESPValue{Type: resp.BulkString, IsNull: true}
+	}
+
+	//pop the first element from the list
+	firstElement := list[0]
+	s.lists[key] = list[1:]
+
+	return resp.RESPValue{Type: resp.BulkString, Str: firstElement}
 }
 
 func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.RESPValue) {
@@ -285,6 +322,12 @@ func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.R
 		conn.Write(response.Serialize())
 	case "LPUSH":
 		response := s.LPush(args)
+		conn.Write(response.Serialize())
+	case "LLEN":
+		response := s.LLen(args)
+		conn.Write(response.Serialize())
+	case "LPOP":
+		response := s.LPop(args)
 		conn.Write(response.Serialize())
 	default:
 		response := resp.RESPValue{Type: resp.Error, Str: fmt.Sprintf("ERR unknown command '%s'", command)}

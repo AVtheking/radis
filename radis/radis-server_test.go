@@ -563,3 +563,67 @@ func TestLPushMultipleValues(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
 }
+
+func TestLLenCommand(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	defer conn.Close()
+	require.NoError(t, err)
+
+	conn.Write(respArray("LPUSH", "list", "a", "b", "c"))
+	got := readWithTimeout(t, conn)
+	expected := ":3\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+	conn.Write(respArray("LLEN", "list"))
+	got = readWithTimeout(t, conn)
+	expected = ":3\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestLLenEmptyList(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	defer conn.Close()
+	require.NoError(t, err)
+
+	conn.Write(respArray("LLEN", "list"))
+	got := readWithTimeout(t, conn)
+	expected := ":0\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestLPopCommand(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	defer conn.Close()
+	require.NoError(t, err)
+
+	conn.Write(respArray("RPUSH", "list", "a", "b", "c"))
+	got := readWithTimeout(t, conn)
+	expected := ":3\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+	conn.Write(respArray("LPOP", "list"))
+	got = readWithTimeout(t, conn)
+	expected = "$1\r\na\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestLPopWithNonExistingList(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	defer conn.Close()
+	require.NoError(t, err)
+
+	conn.Write(respArray("LPOP", "list"))
+	got := readWithTimeout(t, conn)
+	expected := "$-1\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
