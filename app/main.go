@@ -15,13 +15,22 @@ func main() {
 	fmt.Println("Logs from your program will appear here!")
 
 	// Uncomment the code below to pass the first stage
-	
+
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
 		fmt.Println("Failed to bind to port 6379")
 		os.Exit(1)
 	}
-	_, err = l.Accept()
+	conn, err := l.Accept()
+	defer conn.Close()
+
+	buf := make([]byte, 1023)
+	msg, err  conn.Read(buf)
+	if err !=nil{
+		fmt.Sprintf("Error reading connection")
+	}
+	conn.Write([]byte("+PONG\r\n"))
+
 	if err != nil {
 		fmt.Println("Error accepting connection: ", err.Error())
 		os.Exit(1)
