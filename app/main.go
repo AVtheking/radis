@@ -24,11 +24,11 @@ func main() {
 	conn, err := l.Accept()
 	defer conn.Close()
 
-	buf := make([]byte, 1023)
-	msg, err  conn.Read(buf)
-	if err !=nil{
-		fmt.Sprintf("Error reading connection")
-	}
+	// buf := make([]byte, 1023)
+	// msg, err  conn.Read(buf)
+	// if err !=nil{
+	// 	fmt.Sprintf("Error reading connection")
+	// }
 	conn.Write([]byte("+PONG\r\n"))
 
 	if err != nil {
