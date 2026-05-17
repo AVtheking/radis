@@ -5,6 +5,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // respArray builds a RESP array from strings.
@@ -124,7 +126,7 @@ func TestECHOCommnad(t *testing.T) {
 	got := readWithTimeout(t, conn)
 	expected := "$5\r\nhello\r\n"
 	if got != expected {
-		t.Errorf("expected %q, got %q", expected, got		)
+		t.Errorf("expected %q, got %q", expected, got)
 	}
 }
 
@@ -288,5 +290,42 @@ func TestRESP_ConcurrentClients(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Error(err)
 		}
+	}
+}
+
+func TestSETCommand(t *testing.T) {
+	server := startTestServer(t)
+	conn, err := net.Dial("tcp", server.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	conn.Write(respArray("SET", "key", "value"))
+	got := readWithTimeout(t, conn)
+	expected := "+OK\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestGETCommand(t *testing.T) {
+	server := startTestServer(t)
+	conn, err := net.Dial("tcp", server.Addr())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	conn.Write(respArray("SET", "key", "value"))
+	got := readWithTimeout(t, conn)
+	expected := "+OK\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+
+	conn.Write(respArray("GET", "key"))
+	got = readWithTimeout(t, conn)
+	expected = "$5\r\nvalue\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
 	}
 }

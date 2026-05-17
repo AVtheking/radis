@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/codecrafters-io/redis-starter-go/radis/resp"
 )
@@ -14,11 +15,14 @@ import (
 type RadisServer struct {
 	address  string
 	listener net.Listener
+	data     map[string]string
+	mu       sync.RWMutex
 }
 
 func NewRadisServer(address string) *RadisServer {
 	return &RadisServer{
 		address: address,
+		data:    make(map[string]string),
 	}
 }
 
@@ -90,6 +94,36 @@ func (s *RadisServer) handleConnection(conn net.Conn) {
 					} else {
 						response := resp.RESPValue{Type: resp.BulkString, Str: args[0].Str}
 						conn.Write(response.Serialize())
+					}
+				case "SET":
+					if len(args) < 2 {
+						response := resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'set' command"}
+						conn.Write(response.Serialize())
+					} else {
+						key := args[0].Str
+						value := args[1].Str
+						s.mu.Lock()
+						s.data[key] = value
+						s.mu.Unlock()
+						response := resp.RESPValue{Type: resp.SimpleString, Str: "OK"}
+						conn.Write(response.Serialize())
+					}
+				case "GET":
+					if len(args) != 1 {
+						response := resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'get' command"}
+						conn.Write(response.Serialize())
+					} else {
+						key := args[0].Str
+						s.mu.RLock()
+						value, ok := s.data[key]
+						s.mu.RUnlock()
+						if !ok {
+							response := resp.RESPValue{Type: resp.BulkString, IsNull: true}
+							conn.Write(response.Serialize())
+						} else {
+							response := resp.RESPValue{Type: resp.BulkString, Str: value}
+							conn.Write(response.Serialize())
+						}
 					}
 				default:
 					response := resp.RESPValue{Type: resp.Error, Str: fmt.Sprintf("ERR unknown command '%s'", command)}
