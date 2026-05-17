@@ -22,6 +22,7 @@ type RadisServer struct {
 	address  string
 	listener net.Listener
 	data     map[string]StoreItem
+	lists    map[string][]string
 	mu       sync.RWMutex
 }
 
@@ -29,6 +30,7 @@ func NewRadisServer(address string) *RadisServer {
 	return &RadisServer{
 		address: address,
 		data:    make(map[string]StoreItem),
+		lists:   make(map[string][]string),
 	}
 }
 
@@ -152,6 +154,27 @@ func (s *RadisServer) Get(args []resp.RESPValue) resp.RESPValue {
 	return resp.RESPValue{Type: resp.BulkString, Str: value.value}
 }
 
+func (s *RadisServer) RPush(args []resp.RESPValue) resp.RESPValue {
+	if len(args) < 2 {
+		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'rpush' command"}
+	}
+
+	key := args[0].Str
+	values := args[1:]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.lists[key]; !ok {
+		s.lists[key] = []string{}
+	}
+	for _, v := range values {
+		s.lists[key] = append(s.lists[key], v.Str)
+	}
+
+	return resp.RESPValue{Type: resp.Integer, Num: int64(len(s.lists[key]))}
+}
+
 func (s *RadisServer) Ping(args []resp.RESPValue) resp.RESPValue {
 	if len(args) != 0 {
 		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'ping' command"}
@@ -179,6 +202,9 @@ func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.R
 		conn.Write(response.Serialize())
 	case "GET":
 		response := s.Get(args)
+		conn.Write(response.Serialize())
+	case "RPUSH":
+		response := s.RPush(args)
 		conn.Write(response.Serialize())
 	default:
 		response := resp.RESPValue{Type: resp.Error, Str: fmt.Sprintf("ERR unknown command '%s'", command)}

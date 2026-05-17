@@ -390,3 +390,38 @@ func TestSETWithExpiryInMilliseconds(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
 }
+
+func TestRPushCommand(t *testing.T) {
+	server := startTestServer(t)
+	conn, err := net.Dial("tcp", server.Addr())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	conn.Write(respArray("RPUSH", "list", "value1"))
+	got := readWithTimeout(t, conn)
+	expected := ":1\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+
+	conn.Write(respArray("RPUSH", "list", "value2"))
+	got = readWithTimeout(t, conn)
+	expected = ":2\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestRPushMultipleValues(t *testing.T) {
+	server := startTestServer(t)
+	conn, err := net.Dial("tcp", server.Addr())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	conn.Write(respArray("RPUSH", "list", "value1", "value2", "value3"))
+	got := readWithTimeout(t, conn)
+	expected := ":3\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
