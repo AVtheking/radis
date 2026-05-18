@@ -26,13 +26,16 @@ type StoreItem struct {
 	value  string
 	expiry time.Time
 }
+
 type RadisServer struct {
-	address  string
-	listener net.Listener
-	data     map[string]StoreItem
-	lists    map[string][]string
-	mu       sync.RWMutex
-	role     Role
+	address    string
+	listener   net.Listener
+	data       map[string]StoreItem
+	lists      map[string][]string
+	mu         sync.RWMutex
+	role       Role
+	replId     string
+	replOffset int64
 }
 
 type ServerConfig struct {
@@ -46,12 +49,21 @@ func NewRadisServer(config ServerConfig) *RadisServer {
 
 	if config.ReplicaOf != "" {
 		role = Slave
+		return &RadisServer{
+			address: config.Address,
+			data:    make(map[string]StoreItem),
+			lists:   make(map[string][]string),
+			role:    role,
+		}
 	}
+
 	return &RadisServer{
-		address: config.Address,
-		data:    make(map[string]StoreItem),
-		lists:   make(map[string][]string),
-		role:    role,
+		address:    config.Address,
+		data:       make(map[string]StoreItem),
+		lists:      make(map[string][]string),
+		role:       role,
+		replId:     "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
+		replOffset: 0,
 	}
 }
 
@@ -350,7 +362,11 @@ func (s *RadisServer) Info(args []resp.RESPValue) resp.RESPValue {
 	optionalArgument := args[0].Str
 	switch strings.ToUpper(optionalArgument) {
 	case "REPLICATION":
-		return resp.RESPValue{Type: resp.BulkString, Str: fmt.Sprintf("role:%s", s.role)}
+		if s.role == Master {
+			return resp.RESPValue{Type: resp.BulkString, Str: fmt.Sprintf("role:%s\r\nmaster_replid:%s\r\nmaster_repl_offset:%d", s.role, s.replId, s.replOffset)}
+		} else {
+			return resp.RESPValue{Type: resp.BulkString, Str: fmt.Sprintf("role:%s", s.role)}
+		}
 	default:
 		return resp.RESPValue{Type: resp.Error, Str: "ERR unknown command"}
 	}
