@@ -26,6 +26,34 @@ type RESPValue struct {
 	IsNull bool
 }
 
+func CreateArray(values ...string) RESPValue {
+	array := make([]RESPValue, len(values))
+	for i, value := range values {
+		array[i] = CreateBulkString(value)
+	}
+	return RESPValue{Type: Array, Array: array}
+}
+
+func CreateBulkString(value string) RESPValue {
+	return RESPValue{Type: BulkString, Str: value}
+}
+
+func CreateInteger(value int64) RESPValue {
+	return RESPValue{Type: Integer, Num: value}
+}
+
+func CreateSimpleString(value string) RESPValue {
+	return RESPValue{Type: SimpleString, Str: value}
+}
+
+func CreateErrorMessage(value string) RESPValue {
+	return RESPValue{Type: Error, Str: value}
+}
+
+func CreateNull() RESPValue {
+	return RESPValue{Type: BulkString, IsNull: true}
+}
+
 func (v RESPValue) Serialize() []byte {
 	switch v.Type {
 	case SimpleString:

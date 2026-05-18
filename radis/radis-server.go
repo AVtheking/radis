@@ -130,11 +130,10 @@ func (s *RadisServer) handshakeWithMaster() error {
 	}
 	defer conn.Close()
 
-	ping := resp.RESPValue{Type: resp.Array, Array: []resp.RESPValue{{Type: resp.BulkString, Str: "PING"}}}
-	conn.Write(ping.Serialize())
+	ping := resp.CreateArray("PING")
+	writeMessage(conn, ping)
 
-	reader := bufio.NewReader(conn)
-	val, err := resp.ParseRESP(reader)
+	val, err := readMessage(conn)
 	if err != nil {
 		return fmt.Errorf("failed to parse response: %v", err)
 	}
@@ -142,6 +141,33 @@ func (s *RadisServer) handshakeWithMaster() error {
 	if val.Type != resp.SimpleString || val.Str != "PONG" {
 		return fmt.Errorf("master did not respond with PONG")
 	}
+
+	replConf := resp.CreateArray("replconf", "listening-port", s.address)
+
+	writeMessage(conn, replConf)
+
+	val, err = readMessage(conn)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %v", err)
+	}
+
+	if val.Type != resp.SimpleString || val.Str != "OK" {
+		return fmt.Errorf("master did not respond with OK")
+	}
+	log.Println("Replconf sent to master")
+
+	replConf2 := resp.CreateArray("replconf", "capa", "psync2")
+	writeMessage(conn, replConf2)
+
+	val, err = readMessage(conn)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %v", err)
+	}
+
+	if val.Type != resp.SimpleString || val.Str != "OK" {
+		return fmt.Errorf("master did not respond with OK")
+	}
+	log.Println("Replconf2 sent to master")
 
 	log.Println("Handshake with master successful")
 	return nil
@@ -421,6 +447,22 @@ func (s *RadisServer) Info(args []resp.RESPValue) resp.RESPValue {
 	}
 }
 
+func (s *RadisServer) ReplConf(args []resp.RESPValue) resp.RESPValue {
+	if len(args) < 2 {
+		return resp.CreateErrorMessage("ERR wrong number of arguments for 'replconf' command")
+	}
+
+	command := args[0].Str
+
+	switch strings.ToUpper(command) {
+	case "LISTENING-PORT":
+		return resp.CreateSimpleString("OK")
+	case "CAPA":
+		return resp.CreateSimpleString("OK")
+	default:
+		return resp.CreateErrorMessage(fmt.Sprintf("ERR unknown command '%s'", command))
+	}
+}
 func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.RESPValue) {
 	switch strings.ToUpper(command) {
 	case "INFO":
@@ -453,6 +495,13 @@ func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.R
 		conn.Write(response.Serialize())
 	case "LPOP":
 		response := s.LPop(args)
+		conn.Write(response.Serialize())
+	case "REPLCONF":
+		if s.role == Slave {
+			return
+		}
+
+		response := s.ReplConf(args)
 		conn.Write(response.Serialize())
 	default:
 		response := resp.RESPValue{Type: resp.Error, Str: fmt.Sprintf("ERR unknown command '%s'", command)}
