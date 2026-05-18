@@ -51,7 +51,7 @@ func NewRadisServer(config ServerConfig) *RadisServer {
 
 	if config.ReplicaOf != "" {
 		role = Slave
-		parts := strings.Split(config.ReplicaOf, ":")
+		parts := strings.Split(config.ReplicaOf, " ")
 
 		host := parts[0]
 		port := parts[1]
@@ -130,7 +130,7 @@ func (s *RadisServer) handshakeWithMaster() error {
 	}
 	defer conn.Close()
 
-	ping := resp.RESPValue{Type: resp.Array, Array: []resp.RESPValue{resp.RESPValue{Type: resp.SimpleString, Str: "PING"}}}
+	ping := resp.RESPValue{Type: resp.Array, Array: []resp.RESPValue{{Type: resp.BulkString, Str: "PING"}}}
 	conn.Write(ping.Serialize())
 
 	reader := bufio.NewReader(conn)
@@ -382,16 +382,23 @@ func (s *RadisServer) LPop(args []resp.RESPValue) resp.RESPValue {
 	}
 
 	response := resp.RESPValue{Type: resp.Array, Array: []resp.RESPValue{}}
+	if len(list) == 0 {
+		return response
+	}
+
+	if elementsToPop > len(list) {
+		elementsToPop = len(list)
+	}
 
 	if elementsToPop == 1 {
 		firstElement := list[0]
 		s.lists[key] = list[1:]
 		return resp.RESPValue{Type: resp.BulkString, Str: firstElement}
 	} else {
-		for i := 0; i < elementsToPop; i++ {
-			elementToRemove := list[i]
-			response.Array = append(response.Array, resp.RESPValue{Type: resp.BulkString, Str: elementToRemove})
-			s.lists[key] = list[i+1:]
+		poppedElements := list[:elementsToPop]
+		s.lists[key] = list[elementsToPop:]
+		for _, element := range poppedElements {
+			response.Array = append(response.Array, resp.RESPValue{Type: resp.BulkString, Str: element})
 		}
 	}
 	return response
