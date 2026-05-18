@@ -37,7 +37,7 @@ type RadisServer struct {
 	masterHost string
 	masterPort string
 	replId     string
-	replOffset int64
+	replOffset string
 }
 
 type ServerConfig struct {
@@ -65,6 +65,8 @@ func NewRadisServer(config ServerConfig) *RadisServer {
 			role:       role,
 			masterHost: host,
 			masterPort: port,
+			replId:     "",
+			replOffset: "-1",
 		}
 	}
 
@@ -74,7 +76,7 @@ func NewRadisServer(config ServerConfig) *RadisServer {
 		lists:      make(map[string][]string),
 		role:       role,
 		replId:     "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
-		replOffset: 0,
+		replOffset: "0",
 	}
 }
 
@@ -168,6 +170,22 @@ func (s *RadisServer) handshakeWithMaster() error {
 		return fmt.Errorf("master did not respond with OK")
 	}
 	log.Println("Replconf2 sent to master")
+
+	replId := "?"
+	if s.replId != "" {
+		replId = s.replId
+	}
+	psyncCommand := resp.CreateArray("PSYNC", replId, s.replOffset)
+	writeMessage(conn, psyncCommand)
+
+	val, err = readMessage(conn)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %v", err)
+	}
+
+	if val.Type != resp.SimpleString || val.Str != "FULLRESYNC" {
+		return fmt.Errorf("master did not respond with FULLRESYNC")
+	}
 
 	log.Println("Handshake with master successful")
 	return nil
@@ -463,6 +481,26 @@ func (s *RadisServer) ReplConf(args []resp.RESPValue) resp.RESPValue {
 		return resp.CreateErrorMessage(fmt.Sprintf("ERR unknown command '%s'", command))
 	}
 }
+
+func (s *RadisServer) PSync(args []resp.RESPValue) resp.RESPValue {
+	if len(args) != 2 {
+		return resp.CreateErrorMessage("ERR wrong number of arguments for 'psync' command")
+	}
+
+	replId := args[0].Str
+	replOffset := args[1].Str
+
+	if replId == "?" {
+		return resp.CreateSimpleString(fmt.Sprintf("FULLRESYNC %s %s", s.replId, s.replOffset))
+	}
+
+	if replOffset > s.replOffset {
+		return resp.CreateSimpleString(fmt.Sprintf("CONTINUE %s", s.replOffset))
+	}
+	//TODO: update this
+	return resp.CreateSimpleString(fmt.Sprintf("FULLRESYNC %s %s", s.replId, s.replOffset))
+}
+
 func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.RESPValue) {
 	switch strings.ToUpper(command) {
 	case "INFO":
@@ -500,8 +538,13 @@ func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.R
 		if s.role == Slave {
 			return
 		}
-
 		response := s.ReplConf(args)
+		conn.Write(response.Serialize())
+	case "PSYNC":
+		if s.role == Slave {
+			return
+		}
+		response := s.PSync(args)
 		conn.Write(response.Serialize())
 	default:
 		response := resp.RESPValue{Type: resp.Error, Str: fmt.Sprintf("ERR unknown command '%s'", command)}
