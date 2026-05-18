@@ -34,13 +34,44 @@ func readWithTimeout(t *testing.T, conn net.Conn) string {
 
 func startTestServer(t *testing.T) *RadisServer {
 	t.Helper()
-	server := NewRadisServer("127.0.0.1:0")
+	server := NewRadisServer(ServerConfig{
+		Address:   "127.0.0.1:0",
+		ReplicaOf: "",
+	})
 	if err := server.Listen(); err != nil {
 		t.Fatal("failed to start server:", err)
 	}
 	t.Cleanup(func() { server.Close() })
 	go server.Serve()
 	return server
+}
+
+func startTestServerWithReplicaOf(t *testing.T) *RadisServer {
+	t.Helper()
+	server := NewRadisServer(ServerConfig{
+		Address:   "127.0.0.1:0",
+		ReplicaOf: "127.0.0.1:6379",
+	})
+	if err := server.Listen(); err != nil {
+		t.Fatal("failed to start server:", err)
+	}
+	t.Cleanup(func() { server.Close() })
+	go server.Serve()
+	return server
+}
+
+func startTestServerAndConnect(t *testing.T) (net.Conn, error) {
+	server := startTestServer(t)
+	conn, err := net.Dial("tcp", server.Addr())
+	require.NoError(t, err)
+	return conn, nil
+}
+
+func startTestServerWithReplicaOfAndConnect(t *testing.T) (net.Conn, error) {
+	server := startTestServerWithReplicaOf(t)
+	conn, err := net.Dial("tcp", server.Addr())
+	require.NoError(t, err)
+	return conn, nil
 }
 
 func TestHandleConnection(t *testing.T) {
@@ -453,13 +484,6 @@ func TestLRangeCommand(t *testing.T) {
 	}
 }
 
-func startTestServerAndConnect(t *testing.T) (net.Conn, error) {
-	server := startTestServer(t)
-	conn, err := net.Dial("tcp", server.Addr())
-	require.NoError(t, err)
-	return conn, nil
-}
-
 func TestLRangeNegativeStart(t *testing.T) {
 	conn, err := startTestServerAndConnect(t)
 	defer conn.Close()
@@ -662,6 +686,32 @@ func TestLPoPWithMultipleElements(t *testing.T) {
 	conn.Write(respArray("LRange", "list", "0", "-1"))
 	got = readWithTimeout(t, conn)
 	expected = "*3\r\n$1\r\nc\r\n$1\r\nd\r\n$1\r\ne\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestInfoCommand(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	defer conn.Close()
+	require.NoError(t, err)
+
+	conn.Write(respArray("INFO", "Replication"))
+	got := readWithTimeout(t, conn)
+	expected := "$11\r\nrole:master\r\n"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestReplicaOfCommand(t *testing.T) {
+	conn, err := startTestServerWithReplicaOfAndConnect(t)
+	defer conn.Close()
+	require.NoError(t, err)
+
+	conn.Write(respArray("INFO", "Replication"))
+	got := readWithTimeout(t, conn)
+	expected := "$10\r\nrole:slave\r\n"
 	if got != expected {
 		t.Errorf("expected %q, got %q", expected, got)
 	}

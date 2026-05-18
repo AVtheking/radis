@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strconv"
@@ -12,6 +13,13 @@ import (
 	"time"
 
 	"github.com/codecrafters-io/redis-starter-go/radis/resp"
+)
+
+type Role string
+
+const (
+	Master Role = "master"
+	Slave  Role = "slave"
 )
 
 type StoreItem struct {
@@ -24,13 +32,26 @@ type RadisServer struct {
 	data     map[string]StoreItem
 	lists    map[string][]string
 	mu       sync.RWMutex
+	role     Role
 }
 
-func NewRadisServer(address string) *RadisServer {
+type ServerConfig struct {
+	Address   string
+	ReplicaOf string
+}
+
+func NewRadisServer(config ServerConfig) *RadisServer {
+	log.Println("Starting Radis server on", config.Address)
+	role := Master
+
+	if config.ReplicaOf != "" {
+		role = Slave
+	}
 	return &RadisServer{
-		address: address,
+		address: config.Address,
 		data:    make(map[string]StoreItem),
 		lists:   make(map[string][]string),
+		role:    role,
 	}
 }
 
@@ -322,8 +343,24 @@ func (s *RadisServer) LPop(args []resp.RESPValue) resp.RESPValue {
 	return response
 }
 
+func (s *RadisServer) Info(args []resp.RESPValue) resp.RESPValue {
+	if len(args) < 1 {
+		return resp.RESPValue{Type: resp.Error, Str: "ERR wrong number of arguments for 'info' command"}
+	}
+	optionalArgument := args[0].Str
+	switch strings.ToUpper(optionalArgument) {
+	case "REPLICATION":
+		return resp.RESPValue{Type: resp.BulkString, Str: fmt.Sprintf("role:%s", s.role)}
+	default:
+		return resp.RESPValue{Type: resp.Error, Str: "ERR unknown command"}
+	}
+}
+
 func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.RESPValue) {
 	switch strings.ToUpper(command) {
+	case "INFO":
+		response := s.Info(args)
+		conn.Write(response.Serialize())
 	case "PING":
 		response := s.Ping(args)
 		conn.Write(response.Serialize())
