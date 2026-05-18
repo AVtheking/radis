@@ -34,6 +34,8 @@ type RadisServer struct {
 	lists      map[string][]string
 	mu         sync.RWMutex
 	role       Role
+	masterHost string
+	masterPort string
 	replId     string
 	replOffset int64
 }
@@ -49,11 +51,20 @@ func NewRadisServer(config ServerConfig) *RadisServer {
 
 	if config.ReplicaOf != "" {
 		role = Slave
+		parts := strings.Split(config.ReplicaOf, ":")
+
+		host := parts[0]
+		port := parts[1]
+
+		log.Println("Starting slave server with master at", host, port)
+
 		return &RadisServer{
-			address: config.Address,
-			data:    make(map[string]StoreItem),
-			lists:   make(map[string][]string),
-			role:    role,
+			address:    config.Address,
+			data:       make(map[string]StoreItem),
+			lists:      make(map[string][]string),
+			role:       role,
+			masterHost: host,
+			masterPort: port,
 		}
 	}
 
@@ -102,7 +113,38 @@ func (s *RadisServer) Start() error {
 	if err := s.Listen(); err != nil {
 		return err
 	}
+
+	if s.role == Slave {
+		if err := s.handshakeWithMaster(); err != nil {
+			return err
+		}
+	}
+
 	return s.Serve()
+}
+
+func (s *RadisServer) handshakeWithMaster() error {
+	conn, err := net.Dial("tcp", net.JoinHostPort(s.masterHost, s.masterPort))
+	if err != nil {
+		return fmt.Errorf("failed to dial master: %v", err)
+	}
+	defer conn.Close()
+
+	ping := resp.RESPValue{Type: resp.Array, Array: []resp.RESPValue{resp.RESPValue{Type: resp.SimpleString, Str: "PING"}}}
+	conn.Write(ping.Serialize())
+
+	reader := bufio.NewReader(conn)
+	val, err := resp.ParseRESP(reader)
+	if err != nil {
+		return fmt.Errorf("failed to parse response: %v", err)
+	}
+
+	if val.Type != resp.SimpleString || val.Str != "PONG" {
+		return fmt.Errorf("master did not respond with PONG")
+	}
+
+	log.Println("Handshake with master successful")
+	return nil
 }
 
 func (s *RadisServer) handleConnection(conn net.Conn) {

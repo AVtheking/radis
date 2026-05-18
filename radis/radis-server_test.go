@@ -35,7 +35,7 @@ func readWithTimeout(t *testing.T, conn net.Conn) string {
 func startTestServer(t *testing.T) *RadisServer {
 	t.Helper()
 	server := NewRadisServer(ServerConfig{
-		Address:   "127.0.0.1:0",
+		Address:   "127.0.0.1:6378",
 		ReplicaOf: "",
 	})
 	if err := server.Listen(); err != nil {
@@ -49,8 +49,8 @@ func startTestServer(t *testing.T) *RadisServer {
 func startTestServerWithReplicaOf(t *testing.T) *RadisServer {
 	t.Helper()
 	server := NewRadisServer(ServerConfig{
-		Address:   "127.0.0.1:0",
-		ReplicaOf: "127.0.0.1:6379",
+		Address:   "127.0.0.1:6377",
+		ReplicaOf: "127.0.0.1:6378",
 	})
 	if err := server.Listen(); err != nil {
 		t.Fatal("failed to start server:", err)
@@ -715,4 +715,15 @@ func TestReplicaOfCommand(t *testing.T) {
 	if got != expected {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
+}
+
+func TestReplicaHandshakeWithMaster(t *testing.T) {
+	_ = startTestServer(t) // ignore the master server
+	replica := startTestServerWithReplicaOf(t)
+
+	err := replica.handshakeWithMaster()
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+
 }
