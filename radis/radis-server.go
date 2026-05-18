@@ -183,7 +183,9 @@ func (s *RadisServer) handshakeWithMaster() error {
 		return fmt.Errorf("failed to read response: %v", err)
 	}
 
-	if val.Type != resp.SimpleString || val.Str != "FULLRESYNC" {
+	log.Println("PSync response:", val.Str)
+
+	if val.Type != resp.SimpleString || !strings.HasPrefix(val.Str, "FULLRESYNC") {
 		return fmt.Errorf("master did not respond with FULLRESYNC")
 	}
 
