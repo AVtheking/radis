@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -132,10 +133,12 @@ func (s *RadisServer) handshakeWithMaster() error {
 	}
 	defer conn.Close()
 
+	reader := bufio.NewReader(conn)
+
 	ping := resp.CreateArray("PING")
 	writeMessage(conn, ping)
 
-	val, err := readMessage(conn)
+	val, err := resp.ParseRESP(reader)
 	if err != nil {
 		return fmt.Errorf("failed to parse response: %v", err)
 	}
@@ -145,10 +148,9 @@ func (s *RadisServer) handshakeWithMaster() error {
 	}
 
 	replConf := resp.CreateArray("replconf", "listening-port", s.address)
-
 	writeMessage(conn, replConf)
 
-	val, err = readMessage(conn)
+	val, err = resp.ParseRESP(reader)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %v", err)
 	}
@@ -161,7 +163,7 @@ func (s *RadisServer) handshakeWithMaster() error {
 	replConf2 := resp.CreateArray("replconf", "capa", "psync2")
 	writeMessage(conn, replConf2)
 
-	val, err = readMessage(conn)
+	val, err = resp.ParseRESP(reader)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %v", err)
 	}
@@ -178,7 +180,7 @@ func (s *RadisServer) handshakeWithMaster() error {
 	psyncCommand := resp.CreateArray("PSYNC", replId, s.replOffset)
 	writeMessage(conn, psyncCommand)
 
-	val, err = readMessage(conn)
+	val, err = resp.ParseRESP(reader)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %v", err)
 	}
@@ -188,6 +190,33 @@ func (s *RadisServer) handshakeWithMaster() error {
 	if val.Type != resp.SimpleString || !strings.HasPrefix(val.Str, "FULLRESYNC") {
 		return fmt.Errorf("master did not respond with FULLRESYNC")
 	}
+
+	b, err := reader.ReadByte()
+	if err != nil || b != '$' {
+		return fmt.Errorf("expected $ in response, got %c", b)
+	}
+
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read length: %v", err)
+	}
+
+	length, err := strconv.Atoi(strings.TrimRight(line, "\r\n"))
+	if err != nil {
+		return fmt.Errorf("failed to parse length: %v", err)
+	}
+
+	rdbContent := make([]byte, length)
+	n, err := io.ReadFull(reader, rdbContent)
+	if err != nil {
+		return fmt.Errorf("failed to read RDB content: %v", err)
+	}
+
+	if n != length {
+		return fmt.Errorf("expected %d bytes, got %d", length, n)
+	}
+
+	log.Println("RDB content:", string(rdbContent))
 
 	log.Println("Handshake with master successful")
 	return nil
@@ -458,7 +487,7 @@ func (s *RadisServer) Info(args []resp.RESPValue) resp.RESPValue {
 	switch strings.ToUpper(optionalArgument) {
 	case "REPLICATION":
 		if s.role == Master {
-			return resp.RESPValue{Type: resp.BulkString, Str: fmt.Sprintf("role:%s\r\nmaster_replid:%s\r\nmaster_repl_offset:%d", s.role, s.replId, s.replOffset)}
+			return resp.RESPValue{Type: resp.BulkString, Str: fmt.Sprintf("role:%s\r\nmaster_replid:%s\r\nmaster_repl_offset:%s", s.role, s.replId, s.replOffset)}
 		} else {
 			return resp.RESPValue{Type: resp.BulkString, Str: fmt.Sprintf("role:%s", s.role)}
 		}
@@ -501,6 +530,21 @@ func (s *RadisServer) PSync(args []resp.RESPValue) resp.RESPValue {
 	}
 	//TODO: update this
 	return resp.CreateSimpleString(fmt.Sprintf("FULLRESYNC %s %s", s.replId, s.replOffset))
+}
+
+func (s *RadisServer) FullSync(conn net.Conn) error {
+	rdbContent, err := os.ReadFile("empty")
+	if err != nil {
+		rdbContent, err = os.ReadFile("../empty")
+		if err != nil {
+			return fmt.Errorf("failed to read empty RDB file: %v", err)
+		}
+	}
+
+	header := fmt.Sprintf("$%d\r\n", len(rdbContent))
+	conn.Write([]byte(header))
+	conn.Write(rdbContent)
+	return nil
 }
 
 func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.RESPValue) {
@@ -548,6 +592,7 @@ func (s *RadisServer) handleCommand(conn net.Conn, command string, args []resp.R
 		}
 		response := s.PSync(args)
 		conn.Write(response.Serialize())
+		s.FullSync(conn)
 	default:
 		response := resp.RESPValue{Type: resp.Error, Str: fmt.Sprintf("ERR unknown command '%s'", command)}
 		conn.Write(response.Serialize())

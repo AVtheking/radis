@@ -1,11 +1,16 @@
 package radis
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"net"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/codecrafters-io/redis-starter-go/radis/resp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -963,11 +968,133 @@ func TestReplicaOfCommand(t *testing.T) {
 }
 
 func TestReplicaHandshakeWithMaster(t *testing.T) {
-	_ = startTestServer(t) // ignore the master server
+	_ = startTestServer(t)
 	replica := startTestServerWithReplicaOf(t)
 
 	err := replica.handshakeWithMaster()
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
+	require.NoError(t, err)
+}
+
+func TestPSyncReturnsFullResync(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	conn.Write(respArray("PSYNC", "?", "-1"))
+
+	reader := bufio.NewReader(conn)
+
+	val, err := resp.ParseRESP(reader)
+	require.NoError(t, err)
+	require.Equal(t, resp.SimpleString, val.Type)
+	require.True(t, strings.HasPrefix(val.Str, "FULLRESYNC"))
+
+	parts := strings.Split(val.Str, " ")
+	require.Equal(t, 3, len(parts))
+	require.Equal(t, "FULLRESYNC", parts[0])
+	require.NotEmpty(t, parts[1])
+	require.Equal(t, "0", parts[2])
+}
+
+func TestPSyncSendsRDBAfterFullResync(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	conn.Write(respArray("PSYNC", "?", "-1"))
+
+	reader := bufio.NewReader(conn)
+
+	// consume the FULLRESYNC response
+	val, err := resp.ParseRESP(reader)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(val.Str, "FULLRESYNC"))
+
+	// read the RDB transfer: $<len>\r\n<bytes>
+	b, err := reader.ReadByte()
+	require.NoError(t, err)
+	require.Equal(t, byte('$'), b)
+
+	line, err := reader.ReadString('\n')
+	require.NoError(t, err)
+	length, err := strconv.Atoi(strings.TrimRight(line, "\r\n"))
+	require.NoError(t, err)
+	require.Greater(t, length, 0)
+
+	rdbData := make([]byte, length)
+	_, err = io.ReadFull(reader, rdbData)
+	require.NoError(t, err)
+
+	// RDB files start with the REDIS magic header
+	require.True(t, strings.HasPrefix(string(rdbData), "REDIS"), "RDB should start with REDIS magic, got %q", string(rdbData[:10]))
+}
+
+func TestPSyncWrongArgCount(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	conn.Write(respArray("PSYNC", "?"))
+	got := readWithTimeout(t, conn)
+	require.True(t, got[0] == '-', "expected error, got %q", got)
+}
+
+func TestPSyncWithKnownReplId(t *testing.T) {
+	conn, err := startTestServerAndConnect(t)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	conn.Write(respArray("PSYNC", "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb", "0"))
+
+	reader := bufio.NewReader(conn)
+	val, err := resp.ParseRESP(reader)
+	require.NoError(t, err)
+	require.Equal(t, resp.SimpleString, val.Type)
+	require.True(t, strings.HasPrefix(val.Str, "FULLRESYNC") || strings.HasPrefix(val.Str, "CONTINUE"))
+}
+
+func TestFullHandshakeThenRDB(t *testing.T) {
+	server := startTestServer(t)
+	conn, err := net.Dial("tcp", server.Addr())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	reader := bufio.NewReader(conn)
+
+	// REPLCONF listening-port
+	conn.Write(respArray("REPLCONF", "listening-port", "6380"))
+	val, err := resp.ParseRESP(reader)
+	require.NoError(t, err)
+	require.Equal(t, "+OK\r\n", string(val.Serialize()))
+
+	// REPLCONF capa psync2
+	conn.Write(respArray("REPLCONF", "capa", "psync2"))
+	val, err = resp.ParseRESP(reader)
+	require.NoError(t, err)
+	require.Equal(t, "+OK\r\n", string(val.Serialize()))
+
+	// PSYNC ? -1
+	conn.Write(respArray("PSYNC", "?", "-1"))
+	val, err = resp.ParseRESP(reader)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(val.Str, "FULLRESYNC"))
+
+	// RDB transfer
+	b, err := reader.ReadByte()
+	require.NoError(t, err)
+	require.Equal(t, byte('$'), b)
+
+	line, err := reader.ReadString('\n')
+	require.NoError(t, err)
+	length, err := strconv.Atoi(strings.TrimRight(line, "\r\n"))
+	require.NoError(t, err)
+
+	rdbData := make([]byte, length)
+	_, err = io.ReadFull(reader, rdbData)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(string(rdbData), "REDIS"))
 }
