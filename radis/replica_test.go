@@ -27,10 +27,10 @@ func startReplicaServer(t *testing.T, masterAddr string) *SlaveServer {
 	return replica
 }
 
-func startReplicaServerAndConnectToMaster(t *testing.T, masterAddr string) *SlaveServer {
+func startReplicaServerAndConnectToMaster(t *testing.T, masterAddr string, replicaAddr string) *SlaveServer {
 	t.Helper()
 	server := NewRadisServer(ServerConfig{
-		Address:   "127.0.0.1:6377",
+		Address:   replicaAddr,
 		ReplicaOf: addrToReplicaOf(masterAddr),
 	})
 	replica := server.(*SlaveServer)
@@ -53,9 +53,9 @@ func startReplicaServerAndConnect(t *testing.T, masterAddr string) (net.Conn, *S
 	return conn, replica
 }
 
-func startReplicaServerAndConnectToMasterAndConnect(t *testing.T, masterAddr string) (net.Conn, *SlaveServer) {
+func startReplicaServerAndConnectToMasterAndConnect(t *testing.T, masterAddr string, replicaAddr string) (net.Conn, *SlaveServer) {
 	t.Helper()
-	replica := startReplicaServerAndConnectToMaster(t, masterAddr)
+	replica := startReplicaServerAndConnectToMaster(t, masterAddr, replicaAddr)
 	conn, err := net.Dial("tcp", replica.Addr())
 	require.NoError(t, err)
 	return conn, replica

@@ -198,7 +198,7 @@ func TestPropogateToReplicas(t *testing.T) {
 	conn, master := startMasterServerAndConnect(t)
 	defer conn.Close()
 
-	replicaConn, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr())
+	replicaConn, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6377")
 	defer replicaConn.Close()
 
 	conn.Write(respArray("SET", "key", "value"))
@@ -210,5 +210,27 @@ func TestPropogateToReplicas(t *testing.T) {
 	//check if the replica has received the propogated command from master
 	replicaConn.Write(respArray("GET", "key"))
 	got = readWithTimeout(t, replicaConn)
+	require.Equal(t, "$5\r\nvalue\r\n", got)
+}
+
+func TestPropogateToReplicasWithMultipleReplicas(t *testing.T) {
+	conn, master := startMasterServerAndConnect(t)
+	defer conn.Close()
+
+	replicaConn1, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6377")
+	defer replicaConn1.Close()
+
+	replicaConn2, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6376")
+	defer replicaConn2.Close()
+
+	conn.Write(respArray("SET", "key", "value"))
+	time.Sleep(100 * time.Millisecond)
+
+	replicaConn1.Write(respArray("GET", "key"))
+	got := readWithTimeout(t, replicaConn1)
+	require.Equal(t, "$5\r\nvalue\r\n", got)
+
+	replicaConn2.Write(respArray("GET", "key"))
+	got = readWithTimeout(t, replicaConn2)
 	require.Equal(t, "$5\r\nvalue\r\n", got)
 }
