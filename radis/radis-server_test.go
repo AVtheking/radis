@@ -1,22 +1,14 @@
 package radis
 
 import (
-	"bufio"
 	"fmt"
-	"io"
 	"net"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/codecrafters-io/redis-starter-go/radis/resp"
 	"github.com/stretchr/testify/require"
 )
 
-// respArray builds a RESP array from strings.
-// e.g. respArray("PING") → "*1\r\n$4\r\nPING\r\n"
-// e.g. respArray("ECHO", "hello") → "*2\r\n$4\r\nECHO\r\n$5\r\nhello\r\n"
 func respArray(args ...string) []byte {
 	s := fmt.Sprintf("*%d\r\n", len(args))
 	for _, arg := range args {
@@ -25,7 +17,6 @@ func respArray(args ...string) []byte {
 	return []byte(s)
 }
 
-// readWithTimeout reads from conn with a deadline so tests don't hang.
 func readWithTimeout(t *testing.T, conn net.Conn) string {
 	t.Helper()
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -37,52 +28,33 @@ func readWithTimeout(t *testing.T, conn net.Conn) string {
 	return string(buf[:n])
 }
 
-func startTestServer(t *testing.T) *RadisServer {
+func startMasterServer(t *testing.T) *MasterServer {
 	t.Helper()
 	server := NewRadisServer(ServerConfig{
 		Address:   "127.0.0.1:6378",
 		ReplicaOf: "",
 	})
-	if err := server.Listen(); err != nil {
+	master := server.(*MasterServer)
+	if err := master.Listen(); err != nil {
 		t.Fatal("failed to start server:", err)
 	}
-	t.Cleanup(func() { server.Close() })
-	go server.Serve()
-	return server
+	t.Cleanup(func() { master.Close() })
+	go master.Serve()
+	return master
 }
 
-func startTestServerWithReplicaOf(t *testing.T) *RadisServer {
+func startMasterServerAndConnect(t *testing.T) (net.Conn, *MasterServer) {
 	t.Helper()
-	server := NewRadisServer(ServerConfig{
-		Address:   "127.0.0.1:6377",
-		ReplicaOf: "127.0.0.1 6378",
-	})
-	if err := server.Listen(); err != nil {
-		t.Fatal("failed to start server:", err)
-	}
-	t.Cleanup(func() { server.Close() })
-	go server.Serve()
-	return server
-}
-
-func startTestServerAndConnect(t *testing.T) (net.Conn, error) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	require.NoError(t, err)
-	return conn, nil
-}
-
-func startTestServerWithReplicaOfAndConnect(t *testing.T) (net.Conn, error) {
-	server := startTestServerWithReplicaOf(t)
-	conn, err := net.Dial("tcp", server.Addr())
-	require.NoError(t, err)
-	return conn, nil
+	return conn, server
 }
 
 // ==================== PING Tests ====================
 
 func TestHandleConnection(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 
 	conn, err := net.Dial("tcp", server.Addr())
 	if err != nil {
@@ -103,7 +75,7 @@ func TestHandleConnection(t *testing.T) {
 }
 
 func TestMultiplePings(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 
 	conn, err := net.Dial("tcp", server.Addr())
 	if err != nil {
@@ -122,7 +94,7 @@ func TestMultiplePings(t *testing.T) {
 }
 
 func TestConcurrentClients(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 
 	errs := make(chan error, 5)
 	for i := 0; i < 5; i++ {
@@ -154,7 +126,7 @@ func TestConcurrentClients(t *testing.T) {
 // ==================== ECHO Tests ====================
 
 func TestECHOCommnad(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 
 	conn, err := net.Dial("tcp", server.Addr())
 	if err != nil {
@@ -171,8 +143,7 @@ func TestECHOCommnad(t *testing.T) {
 }
 
 func TestECHOWrongArgCount(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
 
 	conn.Write(respArray("ECHO"))
@@ -189,21 +160,15 @@ func TestECHOWrongArgCount(t *testing.T) {
 }
 
 // ==================== RESP Protocol Tests ====================
-//
-// These tests send commands as RESP arrays (how real Redis clients talk).
-// Format: *<num_args>\r\n$<len>\r\n<arg>\r\n ...
-//
-// Example: PING → *1\r\n$4\r\nPING\r\n
 
 func TestRESP_Ping(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
 
-	// *1\r\n$4\r\nPING\r\n
 	conn.Write(respArray("PING"))
 	got := readWithTimeout(t, conn)
 	if got != "+PONG\r\n" {
@@ -212,14 +177,13 @@ func TestRESP_Ping(t *testing.T) {
 }
 
 func TestRESP_Echo(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
 
-	// *2\r\n$4\r\nECHO\r\n$5\r\nhello\r\n
 	conn.Write(respArray("ECHO", "hello"))
 	got := readWithTimeout(t, conn)
 	expected := "$5\r\nhello\r\n"
@@ -229,14 +193,13 @@ func TestRESP_Echo(t *testing.T) {
 }
 
 func TestRESP_EchoWithSpaces(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
 
-	// RESP bulk strings can carry spaces — this is impossible with inline parsing
 	conn.Write(respArray("ECHO", "hello world"))
 	got := readWithTimeout(t, conn)
 	expected := "$11\r\nhello world\r\n"
@@ -246,7 +209,7 @@ func TestRESP_EchoWithSpaces(t *testing.T) {
 }
 
 func TestRESP_EchoEmptyString(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	if err != nil {
 		t.Fatal(err)
@@ -262,7 +225,7 @@ func TestRESP_EchoEmptyString(t *testing.T) {
 }
 
 func TestRESP_MultiplePingsOnSameConnection(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	if err != nil {
 		t.Fatal(err)
@@ -279,7 +242,7 @@ func TestRESP_MultiplePingsOnSameConnection(t *testing.T) {
 }
 
 func TestRESP_UnknownCommand(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	if err != nil {
 		t.Fatal(err)
@@ -288,21 +251,19 @@ func TestRESP_UnknownCommand(t *testing.T) {
 
 	conn.Write(respArray("FOOBAR"))
 	got := readWithTimeout(t, conn)
-	// Should respond with a RESP error (starts with -)
 	if len(got) == 0 || got[0] != '-' {
 		t.Errorf("expected RESP error (starting with '-'), got %q", got)
 	}
 }
 
 func TestRESP_CommandIsCaseInsensitive(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
 
-	// Redis commands are case-insensitive: "ping", "Ping", "PING" all work
 	variants := []string{"ping", "Ping", "pInG", "PING"}
 	for _, v := range variants {
 		conn.Write(respArray(v))
@@ -314,7 +275,7 @@ func TestRESP_CommandIsCaseInsensitive(t *testing.T) {
 }
 
 func TestRESP_ConcurrentClients(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 
 	errs := make(chan error, 5)
 	for i := 0; i < 5; i++ {
@@ -354,7 +315,7 @@ func TestRESP_ConcurrentClients(t *testing.T) {
 // ==================== SET / GET Tests ====================
 
 func TestSETCommand(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	if err != nil {
 		t.Fatal(err)
@@ -370,8 +331,7 @@ func TestSETCommand(t *testing.T) {
 }
 
 func TestSETTooFewArgs(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
 
 	conn.Write(respArray("SET", "key"))
@@ -382,8 +342,7 @@ func TestSETTooFewArgs(t *testing.T) {
 }
 
 func TestSETOverwritesExistingKey(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
 
 	conn.Write(respArray("SET", "key", "first"))
@@ -403,7 +362,7 @@ func TestSETOverwritesExistingKey(t *testing.T) {
 }
 
 func TestGETCommand(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	require.NoError(t, err)
 	defer conn.Close()
@@ -424,8 +383,7 @@ func TestGETCommand(t *testing.T) {
 }
 
 func TestGETNonExistentKey(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
 
 	conn.Write(respArray("GET", "nokey"))
@@ -437,8 +395,7 @@ func TestGETNonExistentKey(t *testing.T) {
 }
 
 func TestGETWrongArgCount(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
 
 	conn.Write(respArray("GET"))
@@ -455,7 +412,7 @@ func TestGETWrongArgCount(t *testing.T) {
 }
 
 func TestSETWithExpiryInSeconds(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	require.NoError(t, err)
 	defer conn.Close()
@@ -466,7 +423,6 @@ func TestSETWithExpiryInSeconds(t *testing.T) {
 	if got != expected {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
-	//it should return the value here as it is not expired yet
 	conn.Write(respArray("GET", "key"))
 	got = readWithTimeout(t, conn)
 	expected = "$5\r\nvalue\r\n"
@@ -475,7 +431,6 @@ func TestSETWithExpiryInSeconds(t *testing.T) {
 	}
 
 	time.Sleep(3 * time.Second)
-	//it should return -1 here as it is expired now
 	conn.Write(respArray("GET", "key"))
 	got = readWithTimeout(t, conn)
 	expected = "$-1\r\n"
@@ -485,7 +440,7 @@ func TestSETWithExpiryInSeconds(t *testing.T) {
 }
 
 func TestSETWithExpiryInMilliseconds(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	require.NoError(t, err)
 	defer conn.Close()
@@ -497,7 +452,6 @@ func TestSETWithExpiryInMilliseconds(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
 
-	//it should return the value here as it is not expired yet
 	conn.Write(respArray("GET", "key"))
 	got = readWithTimeout(t, conn)
 	expected = "$5\r\nvalue\r\n"
@@ -506,7 +460,6 @@ func TestSETWithExpiryInMilliseconds(t *testing.T) {
 	}
 
 	time.Sleep(3 * time.Second)
-	//it should return -1 here as it is expired now
 	conn.Write(respArray("GET", "key"))
 	got = readWithTimeout(t, conn)
 	expected = "$-1\r\n"
@@ -516,8 +469,7 @@ func TestSETWithExpiryInMilliseconds(t *testing.T) {
 }
 
 func TestSETWithExpiryMissingValue(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
 
 	conn.Write(respArray("SET", "key", "value", "EX"))
@@ -528,8 +480,7 @@ func TestSETWithExpiryMissingValue(t *testing.T) {
 }
 
 func TestSETOverwriteRemovesOldExpiry(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
 
 	conn.Write(respArray("SET", "key", "value", "PX", "500"))
@@ -551,7 +502,7 @@ func TestSETOverwriteRemovesOldExpiry(t *testing.T) {
 }
 
 func TestConcurrentSETAndGET(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 
 	errs := make(chan error, 10)
 	for i := 0; i < 10; i++ {
@@ -594,7 +545,7 @@ func TestConcurrentSETAndGET(t *testing.T) {
 // ==================== RPUSH Tests ====================
 
 func TestRPushCommand(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	require.NoError(t, err)
 	defer conn.Close()
@@ -615,7 +566,7 @@ func TestRPushCommand(t *testing.T) {
 }
 
 func TestRPushMultipleValues(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	require.NoError(t, err)
 	defer conn.Close()
@@ -631,9 +582,8 @@ func TestRPushMultipleValues(t *testing.T) {
 // ==================== LPUSH Tests ====================
 
 func TestLPushCommand(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
-	require.NoError(t, err)
 
 	conn.Write(respArray("LPUSH", "list", "a"))
 	got := readWithTimeout(t, conn)
@@ -658,9 +608,8 @@ func TestLPushCommand(t *testing.T) {
 }
 
 func TestLPushMultipleValues(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
-	require.NoError(t, err)
 
 	conn.Write(respArray("LPUSH", "list", "a", "b", "c"))
 	got := readWithTimeout(t, conn)
@@ -679,9 +628,8 @@ func TestLPushMultipleValues(t *testing.T) {
 // ==================== LLEN Tests ====================
 
 func TestLLenCommand(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
-	require.NoError(t, err)
 
 	conn.Write(respArray("LPUSH", "list", "a", "b", "c"))
 	got := readWithTimeout(t, conn)
@@ -698,9 +646,8 @@ func TestLLenCommand(t *testing.T) {
 }
 
 func TestLLenEmptyList(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
-	require.NoError(t, err)
 
 	conn.Write(respArray("LLEN", "list"))
 	got := readWithTimeout(t, conn)
@@ -713,7 +660,7 @@ func TestLLenEmptyList(t *testing.T) {
 // ==================== LRANGE Tests ====================
 
 func TestLRangeCommand(t *testing.T) {
-	server := startTestServer(t)
+	server := startMasterServer(t)
 	conn, err := net.Dial("tcp", server.Addr())
 	require.NoError(t, err)
 	defer conn.Close()
@@ -724,12 +671,6 @@ func TestLRangeCommand(t *testing.T) {
 	if got != expected {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
-	// conn.Write(respArray("LRange", "list", "0", "-1"))
-	// got = readWithTimeout(t, conn)
-	// expected = "*3\r\n$5\r\nvalue1\r\n$5\r\nvalue2\r\n$5\r\nvalue3\r\n"
-	// if got != expected {
-	// 	t.Errorf("expected %q, got %q", expected, got)
-	// }
 
 	conn.Write(respArray("LRange", "list", "1", "2"))
 	got = readWithTimeout(t, conn)
@@ -740,9 +681,8 @@ func TestLRangeCommand(t *testing.T) {
 }
 
 func TestLRangeNegativeStart(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
-	require.NoError(t, err)
 
 	conn.Write(respArray("RPUSH", "list", "value1", "value2", "value3"))
 	got := readWithTimeout(t, conn)
@@ -760,9 +700,8 @@ func TestLRangeNegativeStart(t *testing.T) {
 }
 
 func TestLRangeNegativeEnd(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
-	require.NoError(t, err)
 
 	conn.Write(respArray("RPUSH", "list", "value1", "value2", "value3"))
 	got := readWithTimeout(t, conn)
@@ -779,9 +718,8 @@ func TestLRangeNegativeEnd(t *testing.T) {
 }
 
 func TestLRangeOutOfBoundsInNegative(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
-	require.NoError(t, err)
 
 	conn.Write(respArray("RPUSH", "list", "value1", "value2", "value3"))
 	got := readWithTimeout(t, conn)
@@ -800,9 +738,8 @@ func TestLRangeOutOfBoundsInNegative(t *testing.T) {
 // ==================== LPOP Tests ====================
 
 func TestLPopCommand(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
-	require.NoError(t, err)
 
 	conn.Write(respArray("RPUSH", "list", "a", "b", "c"))
 	got := readWithTimeout(t, conn)
@@ -825,9 +762,8 @@ func TestLPopCommand(t *testing.T) {
 }
 
 func TestLPopWithNonExistingList(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
-	require.NoError(t, err)
 
 	conn.Write(respArray("LPOP", "list"))
 	got := readWithTimeout(t, conn)
@@ -844,9 +780,8 @@ func TestLPopWithNonExistingList(t *testing.T) {
 }
 
 func TestLPoPWithMultipleElements(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
-	require.NoError(t, err)
 
 	conn.Write(respArray("RPUSH", "list", "a", "b", "c", "d", "e"))
 	got := readWithTimeout(t, conn)
@@ -871,8 +806,7 @@ func TestLPoPWithMultipleElements(t *testing.T) {
 }
 
 func TestLPopCountExceedsListLength(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
 
 	conn.Write(respArray("RPUSH", "list", "a", "b"))
@@ -894,8 +828,7 @@ func TestLPopCountExceedsListLength(t *testing.T) {
 }
 
 func TestLPopAllElementsOneByone(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
 
 	conn.Write(respArray("RPUSH", "list", "x", "y"))
@@ -911,13 +844,11 @@ func TestLPopAllElementsOneByone(t *testing.T) {
 
 	conn.Write(respArray("LPOP", "list"))
 	got = readWithTimeout(t, conn)
-	// list exists but is empty — returns empty array
 	require.Equal(t, "*0\r\n", got)
 }
 
 func TestRPushThenLPopUntilEmpty(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
+	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
 
 	conn.Write(respArray("RPUSH", "q", "a", "b", "c"))
@@ -935,166 +866,5 @@ func TestRPushThenLPopUntilEmpty(t *testing.T) {
 
 	conn.Write(respArray("LPOP", "q"))
 	got = readWithTimeout(t, conn)
-	// list exists but is empty — returns empty array
 	require.Equal(t, "*0\r\n", got)
-}
-
-// ==================== Replication Tests ====================
-
-func TestInfoCommand(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	defer conn.Close()
-	require.NoError(t, err)
-
-	conn.Write(respArray("INFO", "Replication"))
-	got := readWithTimeout(t, conn)
-	expected := "$89\r\nrole:master\r\nmaster_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\r\nmaster_repl_offset:0\r\n"
-	if got != expected {
-		t.Errorf("expected %q, got %q", expected, got)
-	}
-}
-
-func TestReplicaOfCommand(t *testing.T) {
-	conn, err := startTestServerWithReplicaOfAndConnect(t)
-	defer conn.Close()
-	require.NoError(t, err)
-
-	conn.Write(respArray("INFO", "Replication"))
-	got := readWithTimeout(t, conn)
-	expected := "$10\r\nrole:slave\r\n"
-	if got != expected {
-		t.Errorf("expected %q, got %q", expected, got)
-	}
-}
-
-func TestReplicaHandshakeWithMaster(t *testing.T) {
-	_ = startTestServer(t)
-	replica := startTestServerWithReplicaOf(t)
-
-	err := replica.handshakeWithMaster()
-	require.NoError(t, err)
-}
-
-func TestPSyncReturnsFullResync(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
-	defer conn.Close()
-
-	conn.SetDeadline(time.Now().Add(2 * time.Second))
-	conn.Write(respArray("PSYNC", "?", "-1"))
-
-	reader := bufio.NewReader(conn)
-
-	val, err := resp.ParseRESP(reader)
-	require.NoError(t, err)
-	require.Equal(t, resp.SimpleString, val.Type)
-	require.True(t, strings.HasPrefix(val.Str, "FULLRESYNC"))
-
-	parts := strings.Split(val.Str, " ")
-	require.Equal(t, 3, len(parts))
-	require.Equal(t, "FULLRESYNC", parts[0])
-	require.NotEmpty(t, parts[1])
-	require.Equal(t, "0", parts[2])
-}
-
-func TestPSyncSendsRDBAfterFullResync(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
-	defer conn.Close()
-
-	conn.SetDeadline(time.Now().Add(2 * time.Second))
-	conn.Write(respArray("PSYNC", "?", "-1"))
-
-	reader := bufio.NewReader(conn)
-
-	// consume the FULLRESYNC response
-	val, err := resp.ParseRESP(reader)
-	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(val.Str, "FULLRESYNC"))
-
-	// read the RDB transfer: $<len>\r\n<bytes>
-	b, err := reader.ReadByte()
-	require.NoError(t, err)
-	require.Equal(t, byte('$'), b)
-
-	line, err := reader.ReadString('\n')
-	require.NoError(t, err)
-	length, err := strconv.Atoi(strings.TrimRight(line, "\r\n"))
-	require.NoError(t, err)
-	require.Greater(t, length, 0)
-
-	rdbData := make([]byte, length)
-	_, err = io.ReadFull(reader, rdbData)
-	require.NoError(t, err)
-
-	// RDB files start with the REDIS magic header
-	require.True(t, strings.HasPrefix(string(rdbData), "REDIS"), "RDB should start with REDIS magic, got %q", string(rdbData[:10]))
-}
-
-func TestPSyncWrongArgCount(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
-	defer conn.Close()
-
-	conn.Write(respArray("PSYNC", "?"))
-	got := readWithTimeout(t, conn)
-	require.True(t, got[0] == '-', "expected error, got %q", got)
-}
-
-func TestPSyncWithKnownReplId(t *testing.T) {
-	conn, err := startTestServerAndConnect(t)
-	require.NoError(t, err)
-	defer conn.Close()
-
-	conn.SetDeadline(time.Now().Add(2 * time.Second))
-	conn.Write(respArray("PSYNC", "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb", "0"))
-
-	reader := bufio.NewReader(conn)
-	val, err := resp.ParseRESP(reader)
-	require.NoError(t, err)
-	require.Equal(t, resp.SimpleString, val.Type)
-	require.True(t, strings.HasPrefix(val.Str, "FULLRESYNC") || strings.HasPrefix(val.Str, "CONTINUE"))
-}
-
-func TestFullHandshakeThenRDB(t *testing.T) {
-	server := startTestServer(t)
-	conn, err := net.Dial("tcp", server.Addr())
-	require.NoError(t, err)
-	defer conn.Close()
-
-	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	reader := bufio.NewReader(conn)
-
-	// REPLCONF listening-port
-	conn.Write(respArray("REPLCONF", "listening-port", "6380"))
-	val, err := resp.ParseRESP(reader)
-	require.NoError(t, err)
-	require.Equal(t, "+OK\r\n", string(val.Serialize()))
-
-	// REPLCONF capa psync2
-	conn.Write(respArray("REPLCONF", "capa", "psync2"))
-	val, err = resp.ParseRESP(reader)
-	require.NoError(t, err)
-	require.Equal(t, "+OK\r\n", string(val.Serialize()))
-
-	// PSYNC ? -1
-	conn.Write(respArray("PSYNC", "?", "-1"))
-	val, err = resp.ParseRESP(reader)
-	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(val.Str, "FULLRESYNC"))
-
-	// RDB transfer
-	b, err := reader.ReadByte()
-	require.NoError(t, err)
-	require.Equal(t, byte('$'), b)
-
-	line, err := reader.ReadString('\n')
-	require.NoError(t, err)
-	length, err := strconv.Atoi(strings.TrimRight(line, "\r\n"))
-	require.NoError(t, err)
-
-	rdbData := make([]byte, length)
-	_, err = io.ReadFull(reader, rdbData)
-	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(string(rdbData), "REDIS"))
 }
