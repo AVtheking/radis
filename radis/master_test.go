@@ -234,3 +234,20 @@ func TestPropogateToReplicasWithMultipleReplicas(t *testing.T) {
 	got = readWithTimeout(t, replicaConn2)
 	require.Equal(t, "$5\r\nvalue\r\n", got)
 }
+
+func TestPropogateOrderToReplicas(t *testing.T) {
+    conn, master := startMasterServerAndConnect(t)
+    defer conn.Close()
+
+    replicaConn, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6377")
+    defer replicaConn.Close()
+
+    conn.Write(respArray("SET", "key", "first"))
+    conn.Write(respArray("SET", "key", "second"))
+    conn.Write(respArray("SET", "key", "third"))
+    time.Sleep(100 * time.Millisecond)
+
+    replicaConn.Write(respArray("GET", "key"))
+    got := readWithTimeout(t, replicaConn)
+    require.Equal(t, "$5\r\nthird\r\n", got)
+}
