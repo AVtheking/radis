@@ -18,6 +18,7 @@ type SlaveServer struct {
 	*RadisServer
 	masterHost string
 	masterPort string
+	masterConn net.Conn
 	replId     string
 	replOffset string
 }
@@ -33,32 +34,75 @@ func (r *SlaveServer) Serve() error {
 			return err
 		}
 		go r.handleConnection(conn)
+
 	}
+}
+
+func (r *SlaveServer) ConnectToMaster() error {
+	conn, err := r.handshakeWithMaster()
+	if err != nil {
+		return err
+	}
+	r.masterConn = conn
+	go r.listenForPropogatedCommands(r.masterConn)
+	return nil
 }
 
 func (r *SlaveServer) Start() error {
 	if err := r.Listen(); err != nil {
 		return err
 	}
-
-	if err := r.handshakeWithMaster(); err != nil {
+	if err := r.ConnectToMaster(); err != nil {
 		return err
 	}
-
 	return r.Serve()
 }
 
 func (r *SlaveServer) handleConnection(conn net.Conn) {
-    defer conn.Close()
-    reader := bufio.NewReader(conn)
-    for {
-        val, err := resp.ParseRESP(reader)
-        if err != nil { break }
-        if val.Type == resp.Array && len(val.Array) > 0 {
-			fmt.Println("Received command:", val.Array[0].Str)
-            r.handleCommand(conn, val.Array[0].Str, val.Array[1:])
-        }
-    }
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	for {
+		val, err := resp.ParseRESP(reader)
+		if err != nil {
+			break
+		}
+		if val.Type == resp.Array && len(val.Array) > 0 {
+			fmt.Println("Received command in Replica:", val.Array[0].Str)
+			r.handleCommand(conn, val.Array[0].Str, val.Array[1:])
+		}
+	}
+}
+
+func (r *SlaveServer) listenForPropogatedCommands(conn net.Conn) {
+	defer conn.Close()
+	fmt.Println("Listening for propogated commands from master")
+	reader := bufio.NewReader(conn)
+	for {
+		val, err := resp.ParseRESP(reader)
+		if err != nil {
+			break
+		}
+		if val.Type == resp.Array && len(val.Array) > 0 {
+			fmt.Println("Received propogated command from master:", val.Array[0].Str)
+			command := val.Array[0].Str
+			args := val.Array[1:]
+			switch strings.ToUpper(command) {
+			case "SET":
+				r.Set(args)
+			case "GET":
+				r.Get(args)
+			case "RPUSH":
+				r.RPush(args)
+			case "LRANGE":
+				r.LRange(args)
+			case "LPUSH":
+				r.LPush(args)
+			default:
+				fmt.Println("Unknown command from master:", command)
+				return
+			}
+		}
+	}
 }
 
 func (s *SlaveServer) handleCommand(conn net.Conn, command string, args []resp.RESPValue) {
@@ -84,12 +128,11 @@ func (s *SlaveServer) Info(args []resp.RESPValue) resp.RESPValue {
 	}
 }
 
-func (r *SlaveServer) handshakeWithMaster() error {
+func (r *SlaveServer) handshakeWithMaster() (net.Conn, error) {
 	conn, err := net.Dial("tcp", net.JoinHostPort(r.masterHost, r.masterPort))
 	if err != nil {
-		return fmt.Errorf("failed to dial master: %v", err)
+		return nil, fmt.Errorf("failed to dial master: %v", err)
 	}
-	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
 
@@ -98,11 +141,11 @@ func (r *SlaveServer) handshakeWithMaster() error {
 
 	val, err := resp.ParseRESP(reader)
 	if err != nil {
-		return fmt.Errorf("failed to parse response: %v", err)
+		return nil, fmt.Errorf("failed to parse response: %v", err)
 	}
 
 	if val.Type != resp.SimpleString || val.Str != "PONG" {
-		return fmt.Errorf("master did not respond with PONG")
+		return nil, fmt.Errorf("master did not respond with PONG")
 	}
 
 	replConf := resp.CreateArray("replconf", "listening-port", r.address)
@@ -110,11 +153,11 @@ func (r *SlaveServer) handshakeWithMaster() error {
 
 	val, err = resp.ParseRESP(reader)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %v", err)
+		return nil, fmt.Errorf("failed to read response: %v", err)
 	}
 
 	if val.Type != resp.SimpleString || val.Str != "OK" {
-		return fmt.Errorf("master did not respond with OK")
+		return nil, fmt.Errorf("master did not respond with OK")
 	}
 	log.Println("Replconf sent to master")
 
@@ -123,11 +166,11 @@ func (r *SlaveServer) handshakeWithMaster() error {
 
 	val, err = resp.ParseRESP(reader)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %v", err)
+		return nil, fmt.Errorf("failed to read response: %v", err)
 	}
 
 	if val.Type != resp.SimpleString || val.Str != "OK" {
-		return fmt.Errorf("master did not respond with OK")
+		return nil, fmt.Errorf("master did not respond with OK")
 	}
 	log.Println("Replconf2 sent to master")
 
@@ -140,42 +183,42 @@ func (r *SlaveServer) handshakeWithMaster() error {
 
 	val, err = resp.ParseRESP(reader)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %v", err)
+		return nil, fmt.Errorf("failed to read response: %v", err)
 	}
 
 	log.Println("PSync response:", val.Str)
 
 	if val.Type != resp.SimpleString || !strings.HasPrefix(val.Str, "FULLRESYNC") {
-		return fmt.Errorf("master did not respond with FULLRESYNC")
+		return nil, fmt.Errorf("master did not respond with FULLRESYNC")
 	}
 
 	b, err := reader.ReadByte()
 	if err != nil || b != '$' {
-		return fmt.Errorf("expected $ in response, got %c", b)
+		return nil, fmt.Errorf("expected $ in response, got %c", b)
 	}
 
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		return fmt.Errorf("failed to read length: %v", err)
+		return nil, fmt.Errorf("failed to read length: %v", err)
 	}
 
 	length, err := strconv.Atoi(strings.TrimRight(line, "\r\n"))
 	if err != nil {
-		return fmt.Errorf("failed to parse length: %v", err)
+		return nil, fmt.Errorf("failed to parse length: %v", err)
 	}
 
 	rdbContent := make([]byte, length)
 	n, err := io.ReadFull(reader, rdbContent)
 	if err != nil {
-		return fmt.Errorf("failed to read RDB content: %v", err)
+		return nil, fmt.Errorf("failed to read RDB content: %v", err)
 	}
 
 	if n != length {
-		return fmt.Errorf("expected %d bytes, got %d", length, n)
+		return nil, fmt.Errorf("expected %d bytes, got %d", length, n)
 	}
 
 	log.Println("RDB content:", string(rdbContent))
 
 	log.Println("Handshake with master successful")
-	return nil
+	return conn, nil
 }

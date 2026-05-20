@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 func TestMasterInfoCommand(t *testing.T) {
 	conn, _ := startMasterServerAndConnect(t)
 	defer conn.Close()
@@ -25,7 +24,6 @@ func TestMasterInfoCommand(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, got)
 	}
 }
-
 
 func TestMasterReplConfListeningPort(t *testing.T) {
 	conn, _ := startMasterServerAndConnect(t)
@@ -53,7 +51,6 @@ func TestMasterReplConfWrongArgCount(t *testing.T) {
 	got := readWithTimeout(t, conn)
 	require.True(t, got[0] == '-', "expected error, got %q", got)
 }
-
 
 func TestPSyncReturnsFullResync(t *testing.T) {
 	conn, _ := startMasterServerAndConnect(t)
@@ -195,4 +192,23 @@ func TestRDBTransferHasCorrectLength(t *testing.T) {
 	n, err := io.ReadFull(reader, rdbData)
 	require.NoError(t, err)
 	require.Equal(t, declaredLen, n)
+}
+
+func TestPropogateToReplicas(t *testing.T) {
+	conn, master := startMasterServerAndConnect(t)
+	defer conn.Close()
+
+	replicaConn, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr())
+	defer replicaConn.Close()
+
+	conn.Write(respArray("SET", "key", "value"))
+	got := readWithTimeout(t, conn)
+	require.Equal(t, "+OK\r\n", got)
+
+	time.Sleep(100 * time.Millisecond)
+
+	//check if the replica has received the propogated command from master
+	replicaConn.Write(respArray("GET", "key"))
+	got = readWithTimeout(t, replicaConn)
+	require.Equal(t, "$5\r\nvalue\r\n", got)
 }

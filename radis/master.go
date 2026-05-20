@@ -15,8 +15,8 @@ import (
 
 type MasterServer struct {
 	*RadisServer
-	replicas  []net.Conn
-	replicaMu sync.Mutex
+	replicas   []net.Conn
+	replicaMu  sync.Mutex
 	replId     string
 	replOffset string
 }
@@ -52,23 +52,23 @@ func (m *MasterServer) handleConnection(conn net.Conn) {
 			break
 		}
 		if val.Type == resp.Array && len(val.Array) > 0 {
-			fmt.Println("Received command:", val.Array[0].Str)
+			fmt.Println("Received command to Master:", val.Array[0].Str)
 			m.handleCommand(conn, val.Array[0].Str, val.Array[1:])
 		}
 	}
 }
 
-func (m *MasterServer) handleCommand(conn net.Conn, command string, args []resp.RESPValue) {
-	switch strings.ToUpper(command) {
-	case "INFO":
-		conn.Write(m.Info(args).Serialize())
-	case "REPLCONF":
-		conn.Write(m.ReplConf(args).Serialize())
-	case "PSYNC":
-		conn.Write(m.PSync(args).Serialize())
-		m.FullSync(conn)
-	default:
-		m.RadisServer.handleCommand(conn, command, args)
+func (m *MasterServer) propogateToReplicas(command string, args []resp.RESPValue) {
+	m.replicaMu.Lock()
+	defer m.replicaMu.Unlock()
+	argStrings := make([]string, len(args))
+	for i, arg := range args {
+		argStrings[i] = arg.Str
+	}
+	allArgs := append([]string{command}, argStrings...)
+
+	for _, replica := range m.replicas {
+		replica.Write(resp.CreateArray(allArgs...).Serialize())
 	}
 }
 
@@ -143,4 +143,24 @@ func (m *MasterServer) FullSync(conn net.Conn) error {
 	conn.Write([]byte(header))
 	conn.Write(rdbContent)
 	return nil
+}
+
+func (m *MasterServer) handleCommand(conn net.Conn, command string, args []resp.RESPValue) {
+	switch strings.ToUpper(command) {
+	case "SET":
+		conn.Write(m.Set(args).Serialize())
+		m.propogateToReplicas(command, args)
+	case "INFO":
+		conn.Write(m.Info(args).Serialize())
+	case "REPLCONF":
+		conn.Write(m.ReplConf(args).Serialize())
+	case "PSYNC":
+		conn.Write(m.PSync(args).Serialize())
+		m.FullSync(conn)
+		m.replicaMu.Lock()
+		m.replicas = append(m.replicas, conn)
+		m.replicaMu.Unlock()
+	default:
+		m.RadisServer.handleCommand(conn, command, args)
+	}
 }

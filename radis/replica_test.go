@@ -27,6 +27,24 @@ func startReplicaServer(t *testing.T, masterAddr string) *SlaveServer {
 	return replica
 }
 
+func startReplicaServerAndConnectToMaster(t *testing.T, masterAddr string) *SlaveServer {
+	t.Helper()
+	server := NewRadisServer(ServerConfig{
+		Address:   "127.0.0.1:6377",
+		ReplicaOf: addrToReplicaOf(masterAddr),
+	})
+	replica := server.(*SlaveServer)
+	if err := replica.Listen(); err != nil {
+		t.Fatal("failed to start replica:", err)
+	}
+	t.Cleanup(func() { replica.Close() })
+	if err := replica.ConnectToMaster(); err != nil {
+		t.Fatal("failed to connect to master:", err)
+	}
+	go replica.Serve()
+	return replica
+}
+
 func startReplicaServerAndConnect(t *testing.T, masterAddr string) (net.Conn, *SlaveServer) {
 	t.Helper()
 	replica := startReplicaServer(t, masterAddr)
@@ -35,7 +53,13 @@ func startReplicaServerAndConnect(t *testing.T, masterAddr string) (net.Conn, *S
 	return conn, replica
 }
 
-// ==================== Replica INFO Tests ====================
+func startReplicaServerAndConnectToMasterAndConnect(t *testing.T, masterAddr string) (net.Conn, *SlaveServer) {
+	t.Helper()
+	replica := startReplicaServerAndConnectToMaster(t, masterAddr)
+	conn, err := net.Dial("tcp", replica.Addr())
+	require.NoError(t, err)
+	return conn, replica
+}
 
 func TestReplicaInfoCommand(t *testing.T) {
 	master := startMasterServer(t)
@@ -50,17 +74,18 @@ func TestReplicaInfoCommand(t *testing.T) {
 	}
 }
 
-// ==================== Replica Handshake Tests ====================
-
 func TestReplicaHandshakeWithMaster(t *testing.T) {
 	master := startMasterServer(t)
 	replica := startReplicaServer(t, master.Addr())
 
-	err := replica.handshakeWithMaster()
+	conn, err := replica.handshakeWithMaster()
 	require.NoError(t, err)
+	defer conn.Close()
+	//test the connection returned is a connection to the master server
+	conn.Write(respArray("INFO", "Replication"))
+	got := readWithTimeout(t, conn)
+	require.Equal(t, "$89\r\nrole:master\r\nmaster_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\r\nmaster_repl_offset:0\r\n", got)
 }
-
-// ==================== Replica Shared Commands Tests ====================
 
 func TestReplicaPingCommand(t *testing.T) {
 	master := startMasterServer(t)
