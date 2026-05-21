@@ -4,6 +4,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/codecrafters-io/redis-starter-go/radis/resp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -119,4 +120,22 @@ func TestReplicaSetAndGet(t *testing.T) {
 	conn.Write(respArray("GET", "key"))
 	got = readWithTimeout(t, conn)
 	require.Equal(t, "$5\r\nvalue\r\n", got)
+}
+
+func TestReplicaRespondsToGetAck(t *testing.T) {
+	masterSide, replicaSide := net.Pipe()
+	defer masterSide.Close()
+	defer replicaSide.Close()
+
+	replica := &SlaveServer{
+		replOffset: "0",
+	}
+
+	go replica.ReplConf([]resp.RESPValue{
+		{Type: resp.BulkString, Str: "GETACK"},
+		{Type: resp.BulkString, Str: "*"},
+	}, replicaSide)
+
+	got := readWithTimeout(t, masterSide)
+	require.Equal(t, "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$1\r\n0\r\n", got)
 }

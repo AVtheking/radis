@@ -44,7 +44,7 @@ func (r *SlaveServer) ConnectToMaster() error {
 		return err
 	}
 	r.masterConn = conn
-	go r.listenForPropogatedCommands(r.masterConn)
+	go r.listenForMasterCommands(r.masterConn)
 	return nil
 }
 
@@ -73,9 +73,9 @@ func (r *SlaveServer) handleConnection(conn net.Conn) {
 	}
 }
 
-func (r *SlaveServer) listenForPropogatedCommands(conn net.Conn) {
+func (r *SlaveServer) listenForMasterCommands(conn net.Conn) {
 	defer conn.Close()
-	fmt.Println("Listening for propogated commands from master")
+	fmt.Println("Listening for commands from master")
 	reader := bufio.NewReader(conn)
 	for {
 		val, err := resp.ParseRESP(reader)
@@ -83,7 +83,7 @@ func (r *SlaveServer) listenForPropogatedCommands(conn net.Conn) {
 			break
 		}
 		if val.Type == resp.Array && len(val.Array) > 0 {
-			fmt.Println("Received propogated command from master:", val.Array[0].Str)
+			fmt.Println("Received command from master:", val.Array[0].Str)
 			command := val.Array[0].Str
 			args := val.Array[1:]
 			switch strings.ToUpper(command) {
@@ -97,11 +97,25 @@ func (r *SlaveServer) listenForPropogatedCommands(conn net.Conn) {
 				r.LRange(args)
 			case "LPUSH":
 				r.LPush(args)
+			case "REPLCONF":
+				r.ReplConf(args, conn)
 			default:
 				fmt.Println("Unknown command from master:", command)
 				return
 			}
 		}
+	}
+}
+
+func (r *SlaveServer) ReplConf(args []resp.RESPValue, conn net.Conn) {
+	if len(args) < 2 {
+		fmt.Println("ERR wrong number of arguments for 'replconf' command")
+		return
+	}
+	command := args[0].Str
+	switch strings.ToUpper(command) {
+	case "GETACK":
+		conn.Write(resp.CreateArray("REPLCONF", "ACK", r.replOffset).Serialize())
 	}
 }
 

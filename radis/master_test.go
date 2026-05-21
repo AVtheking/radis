@@ -2,6 +2,7 @@ package radis
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"net"
 	"strconv"
@@ -236,18 +237,36 @@ func TestPropogateToReplicasWithMultipleReplicas(t *testing.T) {
 }
 
 func TestPropogateOrderToReplicas(t *testing.T) {
-    conn, master := startMasterServerAndConnect(t)
-    defer conn.Close()
+	conn, master := startMasterServerAndConnect(t)
+	defer conn.Close()
 
-    replicaConn, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6377")
-    defer replicaConn.Close()
+	replicaConn, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6377")
+	defer replicaConn.Close()
 
-    conn.Write(respArray("SET", "key", "first"))
-    conn.Write(respArray("SET", "key", "second"))
-    conn.Write(respArray("SET", "key", "third"))
-    time.Sleep(100 * time.Millisecond)
+	conn.Write(respArray("SET", "key", "first"))
+	conn.Write(respArray("SET", "key", "second"))
+	conn.Write(respArray("SET", "key", "third"))
+	time.Sleep(100 * time.Millisecond)
 
-    replicaConn.Write(respArray("GET", "key"))
-    got := readWithTimeout(t, replicaConn)
-    require.Equal(t, "$5\r\nthird\r\n", got)
+	replicaConn.Write(respArray("GET", "key"))
+	got := readWithTimeout(t, replicaConn)
+	require.Equal(t, "$5\r\nthird\r\n", got)
+}
+
+func TestMasterRequestsAndReceivesReplicaAck(t *testing.T) {
+	conn, master := startMasterServerAndConnect(t)
+	defer conn.Close()
+
+	replicaConn, replica := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6377")
+	defer replicaConn.Close()
+	replica.replOffset = "123"
+	master.replOffset = "-1"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go master.checkReplicaState(ctx)
+
+	require.Eventually(t, func() bool {
+		return master.replOffset == "123"
+	}, 2*time.Second, 10*time.Millisecond)
 }
