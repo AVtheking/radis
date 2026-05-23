@@ -153,6 +153,29 @@ func (m *MasterServer) FullSync(conn net.Conn) error {
 	return nil
 }
 
+func (m *MasterServer) Wait(args []resp.RESPValue) resp.RESPValue {
+	if len(args) != 2 {
+		return resp.CreateErrorMessage("ERR wrong number of arguments for 'wait' command")
+	}
+	replicaCount, err := strconv.Atoi(args[0].Str)
+	if err != nil {
+		return resp.CreateErrorMessage(fmt.Sprintf("ERR invalid replica count: %v", err))
+	}
+	timeout, err := strconv.Atoi(args[1].Str)
+	if err != nil {
+		return resp.CreateErrorMessage(fmt.Sprintf("ERR invalid timeout: %v", err))
+	}
+	if replicaCount == 0 {
+		return resp.CreateInteger(0)
+	}
+	
+	if timeout == 0 {
+		return resp.CreateInteger(0)
+	}
+
+	return resp.CreateInteger(int64(replicaCount))
+}
+
 func (m *MasterServer) handleCommand(conn net.Conn, command string, args []resp.RESPValue, reader *bufio.Reader) {
 	switch strings.ToUpper(command) {
 	case "SET":
@@ -168,6 +191,8 @@ func (m *MasterServer) handleCommand(conn net.Conn, command string, args []resp.
 		m.addReplica(conn)
 		m.listenForReplicaAck(conn, reader)
 		return
+	case "WAIT":
+		conn.Write(m.Wait(args).Serialize())
 	default:
 		m.RadisServer.handleCommand(conn, command, args)
 	}

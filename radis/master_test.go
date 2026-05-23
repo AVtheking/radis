@@ -270,3 +270,12 @@ func TestMasterRequestsAndReceivesReplicaAck(t *testing.T) {
 		return master.replOffset == "123"
 	}, 2*time.Second, 10*time.Millisecond)
 }
+
+func TestWaitCommandWith0Replicas(t *testing.T) {
+	conn, _ := startMasterServerAndConnect(t)
+	defer conn.Close()
+
+	conn.Write(respArray("WAIT", "0", "60000"))
+	got := readWithTimeout(t, conn)
+	require.Equal(t, ":0\r\n", got)
+}
