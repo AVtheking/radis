@@ -73,6 +73,16 @@ func (r *SlaveServer) handleConnection(conn net.Conn) {
 	}
 }
 
+func (r *SlaveServer) currentReplicaOffset() int64 {
+	offset, _ := strconv.ParseInt(r.replOffset, 10, 64)
+	return offset
+}
+
+func (r *SlaveServer) incrementOffset(n int) {
+	currentOffset := r.currentReplicaOffset()
+	r.replOffset = strconv.FormatInt(currentOffset+int64(n), 10)
+}
+
 func (r *SlaveServer) listenForMasterCommands(conn net.Conn) {
 	defer conn.Close()
 	fmt.Println("Listening for commands from master")
@@ -84,21 +94,31 @@ func (r *SlaveServer) listenForMasterCommands(conn net.Conn) {
 		}
 		if val.Type == resp.Array && len(val.Array) > 0 {
 			fmt.Println("Received command from master:", val.Array[0].Str)
+			commandBytes := len(val.Serialize())
 			command := val.Array[0].Str
 			args := val.Array[1:]
 			switch strings.ToUpper(command) {
+			case "PING":
+				r.Ping(args)
+				r.incrementOffset(commandBytes)
 			case "SET":
 				r.Set(args)
+				r.incrementOffset(commandBytes)
 			case "GET":
 				r.Get(args)
+				r.incrementOffset(commandBytes)
 			case "RPUSH":
 				r.RPush(args)
+				r.incrementOffset(commandBytes)
 			case "LRANGE":
 				r.LRange(args)
+				r.incrementOffset(commandBytes)
 			case "LPUSH":
 				r.LPush(args)
+				r.incrementOffset(commandBytes)
 			case "REPLCONF":
 				r.ReplConf(args, conn)
+				r.incrementOffset(commandBytes)
 			default:
 				fmt.Println("Unknown command from master:", command)
 				return

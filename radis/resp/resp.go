@@ -103,7 +103,7 @@ func ParseRESP(r *bufio.Reader) (RESPValue, error) {
 	case '+':
 		return parseSimpleString(r)
 	case '-':
-		return parseError(r)
+		return parseError(r)	
 	case ':':
 		return parseInteger(r)
 	case '$':

@@ -13,6 +13,16 @@ func addrToReplicaOf(addr string) string {
 	return host + " " + port
 }
 
+func createReplicaServer() *SlaveServer {
+	return &SlaveServer{
+		RadisServer: &RadisServer{
+			data:  make(map[string]StoreItem),
+			lists: make(map[string][]string),
+		},
+		replOffset: "0",
+	}
+}
+
 func startReplicaServer(t *testing.T, masterAddr string) *SlaveServer {
 	t.Helper()
 	server := NewRadisServer(ServerConfig{
@@ -138,4 +148,28 @@ func TestReplicaRespondsToGetAck(t *testing.T) {
 
 	got := readWithTimeout(t, masterSide)
 	require.Equal(t, "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$1\r\n0\r\n", got)
+}
+
+func TestReplicaAckOffsetTracksProcessedCommands(t *testing.T) {
+	masterSide, replicaSide := net.Pipe()
+	defer masterSide.Close()
+	defer replicaSide.Close()
+
+	replica := createReplicaServer()
+
+	go replica.listenForMasterCommands(replicaSide)
+
+	masterSide.Write(respArray("REPLCONF", "GETACK", "*"))
+	got := readWithTimeout(t, masterSide)
+	require.Equal(t, "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$1\r\n0\r\n", got)
+
+	masterSide.Write(respArray("REPLCONF", "GETACK", "*"))
+	got = readWithTimeout(t, masterSide)
+	require.Equal(t, "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$2\r\n37\r\n", got)
+
+	masterSide.Write(respArray("PING"))
+	masterSide.Write(respArray("REPLCONF", "GETACK", "*"))
+	got = readWithTimeout(t, masterSide)
+	require.Equal(t, "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$2\r\n88\r\n", got)
+
 }
