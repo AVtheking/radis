@@ -25,7 +25,7 @@ type MasterServer struct {
 	replicaMu  sync.Mutex
 	replId     string
 	replicas   map[net.Conn]*ReplicaState
-	replOffset string
+	replOffset int64
 }
 
 func (m *MasterServer) Serve() error {
@@ -75,10 +75,12 @@ func (m *MasterServer) propogateToReplicas(command string, args []resp.RESPValue
 		argStrings[i] = arg.Str
 	}
 	allArgs := append([]string{command}, argStrings...)
-
+	data := resp.CreateArray(allArgs...).Serialize()
 	for replicaConn, _ := range m.replicas {
-		replicaConn.Write(resp.CreateArray(allArgs...).Serialize())
+		replicaConn.Write(data)
 	}
+
+	m.replOffset += int64(len(data))
 }
 
 func (m *MasterServer) Info(args []resp.RESPValue) resp.RESPValue {
@@ -89,7 +91,7 @@ func (m *MasterServer) Info(args []resp.RESPValue) resp.RESPValue {
 
 	switch strings.ToUpper(optionalArgument) {
 	case "REPLICATION":
-		return resp.CreateBulkString(fmt.Sprintf("role:master\r\nmaster_replid:%s\r\nmaster_repl_offset:%s", m.replId, m.replOffset))
+		return resp.CreateBulkString(fmt.Sprintf("role:master\r\nmaster_replid:%s\r\nmaster_repl_offset:%d", m.replId, m.replOffset))
 	default:
 		return resp.CreateErrorMessage("ERR unknown command")
 	}
@@ -124,7 +126,7 @@ func (m *MasterServer) PSync(args []resp.RESPValue) resp.RESPValue {
 	// replOffset := args[1].Str
 
 	if replId == "?" {
-		return resp.CreateSimpleString(fmt.Sprintf("FULLRESYNC %s %s", m.replId, m.replOffset))
+		return resp.CreateSimpleString(fmt.Sprintf("FULLRESYNC %s %d", m.replId, m.replOffset))
 	}
 
 	// replOffsetInt, err := strconv.Atoi(replOffset)
@@ -138,7 +140,7 @@ func (m *MasterServer) PSync(args []resp.RESPValue) resp.RESPValue {
 	// if replOffsetInt > sreplOffsetInt {
 	// 	return resp.CreateSimpleString(fmt.Sprintf("CONTINUE %s", m.replOffset))
 	// }
-	return resp.CreateSimpleString(fmt.Sprintf("FULLRESYNC %s %s", m.replId, m.replOffset))
+	return resp.CreateSimpleString(fmt.Sprintf("FULLRESYNC %s %d", m.replId, m.replOffset))
 }
 
 func (m *MasterServer) FullSync(conn net.Conn) error {
@@ -160,15 +162,18 @@ func (m *MasterServer) Wait(args []resp.RESPValue) resp.RESPValue {
 	if len(args) != 2 {
 		return resp.CreateErrorMessage("ERR wrong number of arguments for 'wait' command")
 	}
-	replicaCount, err := strconv.Atoi(args[0].Str)
+
+	numReplica, err := strconv.Atoi(args[0].Str)
 	if err != nil {
 		return resp.CreateErrorMessage(fmt.Sprintf("ERR invalid replica count: %v", err))
 	}
+
 	timeout, err := strconv.Atoi(args[1].Str)
 	if err != nil {
 		return resp.CreateErrorMessage(fmt.Sprintf("ERR invalid timeout: %v", err))
 	}
-	if replicaCount == 0 {
+
+	if numReplica == 0 {
 		return resp.CreateInteger(0)
 	}
 
@@ -176,29 +181,26 @@ func (m *MasterServer) Wait(args []resp.RESPValue) resp.RESPValue {
 		return resp.CreateInteger(0)
 	}
 
-	return resp.CreateInteger(int64(replicaCount))
-}
+	targetOffset := m.currentMasterOffset()
 
-func (m *MasterServer) handleCommand(conn net.Conn, command string, args []resp.RESPValue, reader *bufio.Reader) {
-	switch strings.ToUpper(command) {
-	case "SET":
-		conn.Write(m.Set(args).Serialize())
-		m.propogateToReplicas(command, args)
-	case "INFO":
-		conn.Write(m.Info(args).Serialize())
-	case "REPLCONF":
-		conn.Write(m.ReplConf(args).Serialize())
-	case "PSYNC":
-		conn.Write(m.PSync(args).Serialize())
-		m.FullSync(conn)
-		m.addReplica(conn)
-		m.listenForReplicaAck(conn, reader)
-		return
-	case "WAIT":
-		conn.Write(m.Wait(args).Serialize())
-	default:
-		m.RadisServer.handleCommand(conn, command, args)
+	if targetOffset == 0 {
+		return resp.CreateInteger(int64(m.connectednumReplica()))
 	}
+
+	m.requestReplicaAck()
+
+	deadline := time.Now().Add(time.Duration(timeout) * time.Millisecond)
+
+	for time.Now().Before(deadline) {
+		log.Println("\x1b[34m------------------Waiting for replicas to ACK within timeout--------------\x1b[0m")
+		acked := m.countReplicasAtOffset(targetOffset)
+		if acked >= numReplica {
+			return resp.CreateInteger(int64(acked))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	return resp.CreateInteger(int64(m.connectednumReplica()))
 }
 
 func (m *MasterServer) addReplica(conn net.Conn) {
@@ -237,7 +239,7 @@ func (m *MasterServer) listenForReplicaAck(conn net.Conn, reader *bufio.Reader) 
 					if err != nil {
 						fmt.Errorf("ERR invalid replication offset: %v", err)
 					}
-					//TODO: have a better way to handle this
+
 					log.Println("\x1b[32m------------------Replica: ", conn.RemoteAddr().String(), " ACKed with offset: ", offset, "--------------\x1b[0m")
 					m.replicas[conn].offset = offset
 				}
@@ -263,6 +265,61 @@ func (m *MasterServer) checkReplicaState(ctx context.Context) {
 			}
 			m.replicaMu.Unlock()
 		}
+	}
+}
 
+func (m *MasterServer) currentMasterOffset() int64 {
+	return m.replOffset
+}
+
+func (m *MasterServer) connectednumReplica() int {
+	m.replicaMu.Lock()
+	defer m.replicaMu.Unlock()
+	return len(m.replicas)
+}
+
+func (m *MasterServer) requestReplicaAck() {
+	cmd := resp.CreateArray("REPLCONF", "GETACK", "*").Serialize()
+
+	m.replicaMu.Lock()
+	defer m.replicaMu.Unlock()
+
+	for replicaConn, _ := range m.replicas {
+		replicaConn.Write(cmd)
+	}
+}
+
+func (m *MasterServer) countReplicasAtOffset(offset int64) int {
+	m.replicaMu.Lock()
+	defer m.replicaMu.Unlock()
+
+	count := 0
+	for _, replica := range m.replicas {
+		if replica.offset == offset {
+			count++
+		}
+	}
+	return count
+}
+
+func (m *MasterServer) handleCommand(conn net.Conn, command string, args []resp.RESPValue, reader *bufio.Reader) {
+	switch strings.ToUpper(command) {
+	case "SET":
+		conn.Write(m.Set(args).Serialize())
+		m.propogateToReplicas(command, args)
+	case "INFO":
+		conn.Write(m.Info(args).Serialize())
+	case "REPLCONF":
+		conn.Write(m.ReplConf(args).Serialize())
+	case "PSYNC":
+		conn.Write(m.PSync(args).Serialize())
+		m.FullSync(conn)
+		m.addReplica(conn)
+		m.listenForReplicaAck(conn, reader)
+		return
+	case "WAIT":
+		conn.Write(m.Wait(args).Serialize())
+	default:
+		m.RadisServer.handleCommand(conn, command, args)
 	}
 }

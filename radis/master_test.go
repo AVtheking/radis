@@ -264,7 +264,7 @@ func TestMasterRequestsAndReceivesReplicaAck(t *testing.T) {
 	replicaConn, replica := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6377")
 	defer replicaConn.Close()
 	replica.replOffset = "123"
-	master.replOffset = "-1"
+	master.replOffset = -1
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -290,4 +290,58 @@ func TestWaitCommandWith0Replicas(t *testing.T) {
 	conn.Write(respArray("WAIT", "0", "60000"))
 	got := readWithTimeout(t, conn)
 	require.Equal(t, ":0\r\n", got)
+}
+
+func TestWaitCommandReturnsConnectedReplicaCountWithoutWrites(t *testing.T) {
+	conn, master := startMasterServerAndConnect(t)
+	defer conn.Close()
+
+	replicaConn1, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6377")
+	defer replicaConn1.Close()
+
+	replicaConn2, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6376")
+	defer replicaConn2.Close()
+
+	require.Eventually(t, func() bool {
+		master.replicaMu.Lock()
+		defer master.replicaMu.Unlock()
+		return len(master.replicas) == 2
+	}, 2*time.Second, 10*time.Millisecond)
+
+	conn.Write(respArray("WAIT", "1", "500"))
+	got := readWithTimeout(t, conn)
+	require.Equal(t, ":2\r\n", got)
+
+	conn.Write(respArray("WAIT", "2", "500"))
+	got = readWithTimeout(t, conn)
+	require.Equal(t, ":2\r\n", got)
+
+	conn.Write(respArray("WAIT", "9", "500"))
+	got = readWithTimeout(t, conn)
+	require.Equal(t, ":2\r\n", got)
+}
+
+func TestWaitCommandWaitsForReplicasAfterWrite(t *testing.T) {
+	conn, master := startMasterServerAndConnect(t)
+	defer conn.Close()
+
+	replicaConn1, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6377")
+	defer replicaConn1.Close()
+
+	replicaConn2, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6376")
+	defer replicaConn2.Close()
+
+	require.Eventually(t, func() bool {
+		master.replicaMu.Lock()
+		defer master.replicaMu.Unlock()
+		return len(master.replicas) == 2
+	}, 2*time.Second, 10*time.Millisecond)
+
+	conn.Write(respArray("SET", "foo", "123"))
+	got := readWithTimeout(t, conn)
+	require.Equal(t, "+OK\r\n", got)
+
+	conn.Write(respArray("WAIT", "2", "500"))
+	got = readWithTimeout(t, conn)
+	require.Equal(t, ":2\r\n", got)
 }

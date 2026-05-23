@@ -62,7 +62,7 @@ func NewRadisServer(config ServerConfig) Server {
 	return &MasterServer{
 		RadisServer: base,
 		replId:      "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
-		replOffset:  "0",
+		replOffset:  0,
 		replicas:    make(map[net.Conn]*ReplicaState),
 	}
 }
