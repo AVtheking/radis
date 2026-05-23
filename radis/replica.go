@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/codecrafters-io/redis-starter-go/radis/resp"
 )
@@ -39,22 +40,29 @@ func (r *SlaveServer) Serve() error {
 }
 
 func (r *SlaveServer) ConnectToMaster() error {
-	conn, err := r.handshakeWithMaster()
-	if err != nil {
-		return err
+	for {
+		conn, err := r.handshakeWithMaster()
+		if err != nil {
+			log.Println("\x1b[31m------------------Failed to connect to master: ", err, "--------------\x1b[0m")
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		r.masterConn = conn
+		r.listenForMasterCommands(r.masterConn)
+		log.Println("\x1b[31m------------------Master connection died, reconnecting--------------\x1b[0m")
+		//master connection died, so we need to reconnect
+		r.masterConn = nil
+		time.Sleep(1 * time.Second)
 	}
-	r.masterConn = conn
-	go r.listenForMasterCommands(r.masterConn)
-	return nil
 }
 
 func (r *SlaveServer) Start() error {
 	if err := r.Listen(); err != nil {
 		return err
 	}
-	if err := r.ConnectToMaster(); err != nil {
-		return err
-	}
+
+	go r.ConnectToMaster()
+
 	return r.Serve()
 }
 
@@ -135,6 +143,7 @@ func (r *SlaveServer) ReplConf(args []resp.RESPValue, conn net.Conn) {
 	command := args[0].Str
 	switch strings.ToUpper(command) {
 	case "GETACK":
+		fmt.Println("Sending ACK to master with offset:", r.replOffset)
 		conn.Write(resp.CreateArray("REPLCONF", "ACK", r.replOffset).Serialize())
 	}
 }
@@ -251,8 +260,6 @@ func (r *SlaveServer) handshakeWithMaster() (net.Conn, error) {
 		return nil, fmt.Errorf("expected %d bytes, got %d", length, n)
 	}
 
-	log.Println("RDB content:", string(rdbContent))
-
-	log.Println("Handshake with master successful")
+	log.Println("\x1b[36m------------------Handshake with master successful--------------\x1b[0m")
 	return conn, nil
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strconv"
@@ -173,6 +174,7 @@ func (m *MasterServer) addReplica(conn net.Conn) {
 	m.replicaMu.Lock()
 	defer m.replicaMu.Unlock()
 	m.replicas = append(m.replicas, conn)
+	log.Println("\x1b[33m------------------Added replica: ", conn.RemoteAddr().String(), "--------------\x1b[0m")
 }
 
 func (m *MasterServer) removeReplica(conn net.Conn) {
@@ -210,6 +212,7 @@ func (m *MasterServer) listenForReplicaAck(conn net.Conn, reader *bufio.Reader) 
 						fmt.Errorf("ERR invalid replication offset: %v", err)
 					}
 					//TODO: have a better way to handle this
+					log.Println("\x1b[32m------------------Replica: ", conn.RemoteAddr().String(), " ACKed with offset: ", offset, "--------------\x1b[0m")
 					m.replOffset = fmt.Sprintf("%d", offset)
 				}
 
