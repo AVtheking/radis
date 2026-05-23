@@ -202,11 +202,12 @@ func TestPropogateToReplicas(t *testing.T) {
 	replicaConn, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6377")
 	defer replicaConn.Close()
 
+	time.Sleep(200 * time.Millisecond)
 	conn.Write(respArray("SET", "key", "value"))
 	got := readWithTimeout(t, conn)
 	require.Equal(t, "+OK\r\n", got)
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	//check if the replica has received the propogated command from master
 	replicaConn.Write(respArray("GET", "key"))
@@ -224,6 +225,7 @@ func TestPropogateToReplicasWithMultipleReplicas(t *testing.T) {
 	replicaConn2, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6376")
 	defer replicaConn2.Close()
 
+	time.Sleep(200 * time.Millisecond)
 	conn.Write(respArray("SET", "key", "value"))
 	time.Sleep(100 * time.Millisecond)
 
@@ -242,6 +244,8 @@ func TestPropogateOrderToReplicas(t *testing.T) {
 
 	replicaConn, _ := startReplicaServerAndConnectToMasterAndConnect(t, master.Addr(), "127.0.0.1:6377")
 	defer replicaConn.Close()
+
+	time.Sleep(200 * time.Millisecond)
 
 	conn.Write(respArray("SET", "key", "first"))
 	conn.Write(respArray("SET", "key", "second"))
@@ -267,7 +271,15 @@ func TestMasterRequestsAndReceivesReplicaAck(t *testing.T) {
 	go master.checkReplicaState(ctx)
 
 	require.Eventually(t, func() bool {
-		return master.replOffset == "123"
+		master.replicaMu.Lock()
+		defer master.replicaMu.Unlock()
+
+		for _, replica := range master.replicas {
+			if replica.offset == 123 {
+				return true
+			}
+		}
+		return false
 	}, 2*time.Second, 10*time.Millisecond)
 }
 

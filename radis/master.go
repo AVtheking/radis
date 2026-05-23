@@ -16,12 +16,15 @@ import (
 	"github.com/codecrafters-io/redis-starter-go/radis/resp"
 )
 
+type ReplicaState struct {
+	conn   net.Conn
+	offset int64
+}
 type MasterServer struct {
 	*RadisServer
-	replicas  []net.Conn
-	replicaMu sync.Mutex
-	replId    string
-	//TODO: update this
+	replicaMu  sync.Mutex
+	replId     string
+	replicas   map[net.Conn]*ReplicaState
 	replOffset string
 }
 
@@ -73,8 +76,8 @@ func (m *MasterServer) propogateToReplicas(command string, args []resp.RESPValue
 	}
 	allArgs := append([]string{command}, argStrings...)
 
-	for _, replica := range m.replicas {
-		replica.Write(resp.CreateArray(allArgs...).Serialize())
+	for replicaConn, _ := range m.replicas {
+		replicaConn.Write(resp.CreateArray(allArgs...).Serialize())
 	}
 }
 
@@ -118,23 +121,23 @@ func (m *MasterServer) PSync(args []resp.RESPValue) resp.RESPValue {
 	}
 
 	replId := args[0].Str
-	replOffset := args[1].Str
+	// replOffset := args[1].Str
 
 	if replId == "?" {
 		return resp.CreateSimpleString(fmt.Sprintf("FULLRESYNC %s %s", m.replId, m.replOffset))
 	}
 
-	replOffsetInt, err := strconv.Atoi(replOffset)
-	if err != nil {
-		return resp.CreateErrorMessage(fmt.Sprintf("ERR invalid replication offset: %v", err))
-	}
-	sreplOffsetInt, err := strconv.Atoi(m.replOffset)
-	if err != nil {
-		return resp.CreateErrorMessage(fmt.Sprintf("ERR invalid replication offset: %v", err))
-	}
-	if replOffsetInt > sreplOffsetInt {
-		return resp.CreateSimpleString(fmt.Sprintf("CONTINUE %s", m.replOffset))
-	}
+	// replOffsetInt, err := strconv.Atoi(replOffset)
+	// if err != nil {
+	// 	return resp.CreateErrorMessage(fmt.Sprintf("ERR invalid replication offset: %v", err))
+	// }
+	// sreplOffsetInt, err := strconv.Atoi(m.replOffset)
+	// if err != nil {
+	// 	return resp.CreateErrorMessage(fmt.Sprintf("ERR invalid replication offset: %v", err))
+	// }
+	// if replOffsetInt > sreplOffsetInt {
+	// 	return resp.CreateSimpleString(fmt.Sprintf("CONTINUE %s", m.replOffset))
+	// }
 	return resp.CreateSimpleString(fmt.Sprintf("FULLRESYNC %s %s", m.replId, m.replOffset))
 }
 
@@ -168,7 +171,7 @@ func (m *MasterServer) Wait(args []resp.RESPValue) resp.RESPValue {
 	if replicaCount == 0 {
 		return resp.CreateInteger(0)
 	}
-	
+
 	if timeout == 0 {
 		return resp.CreateInteger(0)
 	}
@@ -201,19 +204,14 @@ func (m *MasterServer) handleCommand(conn net.Conn, command string, args []resp.
 func (m *MasterServer) addReplica(conn net.Conn) {
 	m.replicaMu.Lock()
 	defer m.replicaMu.Unlock()
-	m.replicas = append(m.replicas, conn)
+	m.replicas[conn] = &ReplicaState{conn: conn, offset: 0}
 	log.Println("\x1b[33m------------------Added replica: ", conn.RemoteAddr().String(), "--------------\x1b[0m")
 }
 
 func (m *MasterServer) removeReplica(conn net.Conn) {
 	m.replicaMu.Lock()
 	defer m.replicaMu.Unlock()
-	for i, replica := range m.replicas {
-		if replica == conn {
-			m.replicas = append(m.replicas[:i], m.replicas[i+1:]...)
-			break
-		}
-	}
+	delete(m.replicas, conn)
 	conn.Close()
 }
 
@@ -241,7 +239,7 @@ func (m *MasterServer) listenForReplicaAck(conn net.Conn, reader *bufio.Reader) 
 					}
 					//TODO: have a better way to handle this
 					log.Println("\x1b[32m------------------Replica: ", conn.RemoteAddr().String(), " ACKed with offset: ", offset, "--------------\x1b[0m")
-					m.replOffset = fmt.Sprintf("%d", offset)
+					m.replicas[conn].offset = offset
 				}
 
 			}
@@ -260,8 +258,8 @@ func (m *MasterServer) checkReplicaState(ctx context.Context) {
 		case <-ticker.C:
 			m.replicaMu.Lock()
 			cmd := resp.CreateArray("REPLCONF", "GETACK", "*")
-			for _, replica := range m.replicas {
-				replica.Write(cmd.Serialize())
+			for replicaConn, _ := range m.replicas {
+				replicaConn.Write(cmd.Serialize())
 			}
 			m.replicaMu.Unlock()
 		}
