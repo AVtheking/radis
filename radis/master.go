@@ -103,7 +103,10 @@ func (m *MasterServer) ReplConf(args []resp.RESPValue) resp.RESPValue {
 	case "LISTENING-PORT":
 		return resp.CreateSimpleString("OK")
 	case "CAPA":
-		return resp.CreateSimpleString("OK")
+		if strings.Contains(args[1].Str, "psync2") {
+			return resp.CreateSimpleString("OK")
+		}
+		return resp.CreateErrorMessage("ERR psync2 capability not found")
 	default:
 		return resp.CreateErrorMessage(fmt.Sprintf("ERR unknown command '%s'", command))
 	}
