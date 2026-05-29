@@ -20,12 +20,19 @@ type ReplicaState struct {
 	conn   net.Conn
 	offset int64
 }
+
+type BacklogEntry struct {
+	startOffset int64
+	endOffset   int64
+	data        []byte
+}
 type MasterServer struct {
 	*RadisServer
 	replicaMu  sync.Mutex
 	replId     string
 	replicas   map[net.Conn]*ReplicaState
 	replOffset int64
+	backlog    []BacklogEntry
 }
 
 func (m *MasterServer) Serve() error {
@@ -71,16 +78,29 @@ func (m *MasterServer) propogateToReplicas(command string, args []resp.RESPValue
 	m.replicaMu.Lock()
 	defer m.replicaMu.Unlock()
 	argStrings := make([]string, len(args))
+
 	for i, arg := range args {
 		argStrings[i] = arg.Str
 	}
+
 	allArgs := append([]string{command}, argStrings...)
 	data := resp.CreateArray(allArgs...).Serialize()
+
+	startOffset := m.replOffset + 1
+	endOffset := startOffset + int64(len(data))
+
+	m.backlog = append(m.backlog, BacklogEntry{
+		startOffset: startOffset,
+		endOffset:   endOffset,
+		data:        data,
+	})
+
+	m.replOffset = endOffset
+
 	for replicaConn, _ := range m.replicas {
 		replicaConn.Write(data)
 	}
 
-	m.replOffset += int64(len(data))
 }
 
 func (m *MasterServer) Info(args []resp.RESPValue) resp.RESPValue {
